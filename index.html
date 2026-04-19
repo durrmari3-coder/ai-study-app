@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumina - AI Study App</title>
+    <meta name="description" content="Lumina AI Study App - Generate flashcards, quizzes, presentations, and infographics from your study materials using AI.">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar thin-sidebar">
+            <div class="logo">
+                <ion-icon name="sparkles"></ion-icon>
+            </div>
+            
+            <ul class="nav-links thin" id="nav-menu">
+                <li class="active" data-route="dashboard" title="Dashboard">
+                    <ion-icon name="grid-outline"></ion-icon>
+                </li>
+                <li data-route="notebook" title="Open Notebook">
+                    <ion-icon name="chatbubbles-outline"></ion-icon>
+                </li>
+                <li data-route="overviews" title="Media Overviews">
+                    <ion-icon name="play-circle-outline"></ion-icon>
+                </li>
+                <li data-route="studio" title="Studio Generator">
+                    <ion-icon name="color-palette-outline"></ion-icon>
+                </li>
+                <li data-route="pathways" title="Mastery Pathways">
+                    <ion-icon name="map-outline"></ion-icon>
+                </li>
+                <li data-route="flashcards" title="Flashcards">
+                    <ion-icon name="albums-outline"></ion-icon>
+                </li>
+                <li data-route="quizzes" title="Quizzes">
+                    <ion-icon name="help-circle-outline"></ion-icon>
+                </li>
+                <li data-route="study-rooms" title="Study Rooms">
+                    <ion-icon name="people-outline"></ion-icon>
+                </li>
+                <li data-route="blur-study" title="Blur Study">
+                    <ion-icon name="eye-off-outline"></ion-icon>
+                </li>
+                <li data-route="review-mistakes" title="Review Mistakes">
+                    <ion-icon name="alert-circle-outline"></ion-icon>
+                </li>
+                <li data-route="mastery" title="Mastery Analytics">
+                    <ion-icon name="bar-chart-outline"></ion-icon>
+                </li>
+                <li data-route="settings" title="Settings" style="margin-top: auto">
+                    <ion-icon name="settings-outline"></ion-icon>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Sources Sidebar (NotebookLM Style) -->
+        <aside class="sources-sidebar">
+            <div class="sources-header">
+                <h2>Sources</h2>
+                <button class="btn btn-primary btn-add-source" onclick="openIngestModal()" title="Add Source">
+                    <ion-icon name="add-outline"></ion-icon>
+                </button>
+            </div>
+            <p class="sources-subtitle">Select sources to include in context</p>
+            <div class="sources-list" id="global-sources-list">
+                <!-- Sources dynamically injected here by app.js -->
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h1 id="page-title">Dashboard</h1>
+                <div class="flex-spacer"></div>
+                <div id="api-key-status" class="status-badge missing">API Key Missing</div>
+                <div class="user-profile">
+                    <div class="avatar">
+                        <ion-icon name="person-outline"></ion-icon>
+                    </div>
+                </div>
+            </header>
+            
+            <div id="content-area" class="content-area">
+                <!-- Views dynamically injected here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+    
+    <!-- Modal Container -->
+    <div id="modal-container" class="modal-container hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content" id="modal-body"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
