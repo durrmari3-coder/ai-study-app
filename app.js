@@ -697,6 +697,7 @@ const Views = {
                         <option value="blur">Progressive Hiding</option>
                         <option value="redaction">Redaction Game (Reverse Blur)</option>
                         <option value="blurt">Full Blurt (Semantic Validation)</option>
+                        <option value="active-recall">Active Recall Review (Augmented Feedback)</option>
                     </select>
                 </div>
             </div>
@@ -1075,7 +1076,7 @@ const bindViewEvents = (route) => {
                         if (pct > 70) document.getElementById('redaction-score').style.color = 'var(--warning)';
                         if (pct > 85) document.getElementById('redaction-score').style.color = 'var(--success)';
                     };
-                } else if (mode === 'blurt') {
+                } else if (mode === 'blurt' || mode === 'active-recall') {
                     blurtArea.style.display = 'block';
                     textPanel.innerHTML = `<div style="filter: blur(20px); opacity: 0.3; user-select: none;">${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}</div>`;
                     
@@ -1084,34 +1085,65 @@ const bindViewEvents = (route) => {
                         if (!userBlurt) return showToast("Type something first!", "error");
                         statusEl.textContent = "Gemini is validating your understanding...";
                         try {
-                            const valRes = await callGemini([
-                                { text: `SOURCE TEXT:\n${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}\n\nUSER RECALL:\n${userBlurt}\n\nCompare the user's recall with the source. Identify which key concepts they GOT RIGHT and which they MISSED or MISUNDERSTOOD. Return a JSON object: {"score": 0-100, "feedback": "overall feedback", "gotRight": ["concept1", "concept2"], "missed": ["concept3"]}` }
-                            ], "You are a Socratic validator. Use semantic similarity to judge if the user 'got the concept' even if words differ.", null, "application/json");
+                            let valRes;
+                            if (mode === 'active-recall') {
+                                valRes = await callGemini([
+                                    { text: `SOURCE TEXT:\n${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}\n\nUSER RECALL:\n${userBlurt}\n\nCompare the user's recall with the source. Provide feedback by augmenting the user's original text. 
+                                    1. Keep the user's text as much as possible.
+                                    2. Insert missing information from the source into the user's text using [MISSING]information[/MISSING] tags.
+                                    3. Correct wrong information using [CORRECTED]correct information[/CORRECTED] tags placed immediately after the wrong part.
+                                    4. Provide a recall score (0-100) and brief feedback.
+                                    
+                                    Return ONLY valid JSON: {"score": 85, "feedback": "overall feedback", "annotatedRecall": "The user's original text with [MISSING]...[/MISSING] and [CORRECTED]...[/CORRECTED] tags inserted."}` }
+                                ], "You are a Socratic study assistant. Be precise but encouraging.", null, "application/json");
+                            } else {
+                                valRes = await callGemini([
+                                    { text: `SOURCE TEXT:\n${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}\n\nUSER RECALL:\n${userBlurt}\n\nCompare the user's recall with the source. Identify which key concepts they GOT RIGHT and which they MISSED or MISUNDERSTOOD. Return a JSON object: {"score": 0-100, "feedback": "overall feedback", "gotRight": ["concept1", "concept2"], "missed": ["concept3"]}` }
+                                ], "You are a Socratic validator. Use semantic similarity to judge if the user 'got the concept' even if words differ.", null, "application/json");
+                            }
                             
                             const valData = parseJsonSafe(valRes);
                             textPanel.style.filter = 'none';
                             textPanel.style.opacity = '1';
                             
-                            // Highlight the source text with semantic heatmap
-                            let highlightedText = res.replace(/\[CON\]|\[\/CON\]/g, '');
-                            valData.gotRight.forEach(concept => {
-                                const reg = new RegExp(`(${concept})`, 'gi');
-                                highlightedText = highlightedText.replace(reg, `<span class="blur-term correct revealed">$1</span>`);
-                            });
-                            valData.missed.forEach(concept => {
-                                const reg = new RegExp(`(${concept})`, 'gi');
-                                highlightedText = highlightedText.replace(reg, `<span class="blur-term missed revealed">$1</span>`);
-                            });
-                            // Clean up remaining tags
-                            highlightedText = highlightedText.replace(/\[KEY\](.*?)\[\/KEY\]/g, '<span class="blur-term revealed">$1</span>');
-                            
-                            textPanel.innerHTML = `
-                                <div class="glass-panel" style="margin-bottom: 1.5rem; border-color: var(--accent);">
-                                    <h3 style="color:var(--accent)">Recall Score: ${valData.score}%</h3>
-                                    <p>${valData.feedback}</p>
-                                </div>
-                                <div>${highlightedText}</div>
-                            `;
+                            if (mode === 'active-recall') {
+                                const htmlRecall = valData.annotatedRecall
+                                    .replace(/\[MISSING\](.*?)\[\/MISSING\]/g, '<span class="recall-missing">$1</span>')
+                                    .replace(/\[CORRECTED\](.*?)\[\/CORRECTED\]/g, '<span class="recall-corrected">$1</span>');
+                                
+                                textPanel.innerHTML = `
+                                    <div class="recall-feedback-panel">
+                                        <h3 style="color:var(--accent); margin-bottom: 0.5rem">Recall Score: ${valData.score}%</h3>
+                                        <p style="margin-bottom: 1rem">${valData.feedback}</p>
+                                        <div style="font-size: 1.1rem; line-height: 1.8;">${htmlRecall}</div>
+                                    </div>
+                                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 1rem;">
+                                        <span class="recall-missing" style="padding: 2px 6px;">Green</span> = Missing info &nbsp; | &nbsp; 
+                                        <span class="recall-corrected" style="padding: 2px 6px;">Orange</span> = Corrections
+                                    </p>
+                                `;
+                            } else {
+                                // Highlight the source text with semantic heatmap (Existing Blurt Mode)
+                                let highlightedText = res.replace(/\[CON\]|\[\/CON\]/g, '');
+                                valData.gotRight.forEach(concept => {
+                                    const reg = new RegExp(`(${concept})`, 'gi');
+                                    highlightedText = highlightedText.replace(reg, `<span class="blur-term correct revealed">$1</span>`);
+                                });
+                                valData.missed.forEach(concept => {
+                                    const reg = new RegExp(`(${concept})`, 'gi');
+                                    highlightedText = highlightedText.replace(reg, `<span class="blur-term missed revealed">$1</span>`);
+                                });
+                                // Clean up remaining tags
+                                highlightedText = highlightedText.replace(/\[KEY\](.*?)\[\/KEY\]/g, '<span class="blur-term revealed">$1</span>');
+                                
+                                textPanel.innerHTML = `
+                                    <div class="glass-panel" style="margin-bottom: 1.5rem; border-color: var(--accent);">
+                                        <h3 style="color:var(--accent)">Recall Score: ${valData.score}%</h3>
+                                        <p>${valData.feedback}</p>
+                                    </div>
+                                    <div>${highlightedText}</div>
+                                `;
+                            }
                             statusEl.textContent = "";
                         } catch (e) { statusEl.textContent = e.message; }
                     };
