@@ -333,6 +333,7 @@ window.processIngest = async () => {
     if (!title) return showToast("Title is required", "error");
     
     let content = "", mimeType = "", actualType = 'text';
+    let isLargeMedia = false;
     
     try {
         if (type === 'text') {
@@ -349,6 +350,9 @@ window.processIngest = async () => {
             actualType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'pdf');
             mimeType = file.type;
             
+            // Check if file is > 4MB (will likely crash localStorage)
+            if (file.size > 4 * 1024 * 1024) isLargeMedia = true;
+            
             content = await new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onload = () => resolve(reader.result.split(',')[1]);
@@ -357,14 +361,27 @@ window.processIngest = async () => {
             });
         }
         
-        const newDoc = { title, type: actualType, items: [{ title: 'Main Content', type: actualType, mimeType, content }] };
-        const docs = AppState.documents;
-        docs.push(newDoc);
-        saveState('documents', docs);
+        const newDoc = { title, type: actualType, items: [{ title: 'Main Content', type: actualType, mimeType, content, isLargeMedia }] };
+        AppState.documents.push(newDoc);
+        
+        // Before saving to localStorage, strip massive content to prevent quota crash
+        const safeDocs = AppState.documents.map(doc => {
+            return {
+                ...doc,
+                items: doc.items.map(it => it.isLargeMedia ? { ...it, content: "[CONTENT STRIPPED FOR STORAGE LIMITS]" } : it)
+            }
+        });
+        
+        saveState('documents', safeDocs);
         
         document.getElementById('modal-container').classList.add('hidden');
         window.renderSourcesSidebar();
-        showToast("Source added successfully!");
+        
+        if (isLargeMedia) {
+            showToast("Large file added! It will be available for this session only.", "warning");
+        } else {
+            showToast("Source added successfully!");
+        }
     } catch (e) {
         showToast("Error processing source", "error");
     }
@@ -388,10 +405,19 @@ function complexitySelector(id) {
     return `<div class="form-group" style="margin:0">
         <label style="font-weight: 600; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem; display: block;">Complexity Level</label>
         <div class="complexity-pill-container" style="background: rgba(255,255,255,0.05); padding: 0.25rem; border-radius: 0.5rem; display: flex; gap: 0.25rem;">
+            <div class="complexity-pill" onclick="window.setComplexity(this, '${id}')" style="flex:1; text-align:center; padding: 0.5rem; border-radius: 0.4rem; cursor:pointer; font-weight: 600; font-size: 0.8rem;" data-value="easy">Easy</div>
             <div class="complexity-pill active" onclick="window.setComplexity(this, '${id}')" style="flex:1; text-align:center; padding: 0.5rem; border-radius: 0.4rem; cursor:pointer; font-weight: 600; font-size: 0.8rem;" data-value="medium">Standard</div>
-            <div class="complexity-pill" onclick="window.setComplexity(this, '${id}')" style="flex:1; text-align:center; padding: 0.5rem; border-radius: 0.4rem; cursor:pointer; font-weight: 600; font-size: 0.8rem;" data-value="hard">Advanced</div>
+            <div class="complexity-pill" onclick="window.setComplexity(this, '${id}')" style="flex:1; text-align:center; padding: 0.5rem; border-radius: 0.4rem; cursor:pointer; font-weight: 600; font-size: 0.8rem;" data-value="hard">Hard</div>
+            <div class="complexity-pill" onclick="window.setComplexity(this, '${id}')" style="flex:1; text-align:center; padding: 0.5rem; border-radius: 0.4rem; cursor:pointer; font-weight: 600; font-size: 0.8rem;" data-value="expert">Expert</div>
         </div>
         <input type="hidden" id="${id}" value="medium">
+    </div>`;
+}
+
+function countSelector(id, defaultValue) {
+    return `<div class="form-group" style="margin:0">
+        <label style="font-weight: 600; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem; display: block;">Amount</label>
+        <input type="number" id="${id}" class="form-control" value="${defaultValue}" min="1" max="50">
     </div>`;
 }
 
@@ -442,9 +468,10 @@ const Views = {
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Creative Studio</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate academic presentations and visual aids.</p>
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
-                ${complexitySelector('studio-complexity')}
+            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
                 ${customFocusInput('input-studio-focus')}
+                ${complexitySelector('studio-complexity')}
+                ${countSelector('input-studio-count', 5)}
             </div>
             <div class="studio-generator-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                 <div class="studio-gen-card glass-panel" onclick="window.generateStudio('presentation')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
@@ -494,9 +521,13 @@ const Views = {
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Mastery Decks</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">AI-generated active recall sets.</p>
-            <div style="display:flex; gap: 1rem; align-items:center; margin-bottom: 2rem; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 0.5rem;">
-                <div class="form-group" style="max-width: 150px; margin:0"><label>Deck Size</label><input type="number" id="input-card-count" class="form-control" value="10" min="5" max="50"></div>
-                <button class="btn btn-primary" id="btn-gen-flashcards" style="margin-left: auto"><ion-icon name="sparkles"></ion-icon> Generate New Deck</button>
+            <div style="display:flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 1.5rem;">
+                    ${customFocusInput('input-flashcard-focus')}
+                    ${complexitySelector('flashcard-complexity')}
+                    ${countSelector('input-card-count', 10)}
+                </div>
+                <button class="btn btn-primary" id="btn-gen-flashcards" style="align-self: flex-end; margin-top: 1rem"><ion-icon name="sparkles"></ion-icon> Generate New Deck</button>
             </div>
             <div id="flashcard-workspace">
                 ${decks.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No decks created yet.</p>' : 
@@ -513,8 +544,13 @@ const Views = {
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Assessment Engine</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Challenge your knowledge with adaptive testing.</p>
-            <div style="display:flex; gap: 1rem; align-items:center; margin-bottom: 2rem; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 0.5rem;">
-                <button class="btn btn-primary" id="btn-gen-quiz"><ion-icon name="sparkles"></ion-icon> Start New Quiz</button>
+            <div style="display:flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 1.5rem;">
+                    ${customFocusInput('input-quiz-focus')}
+                    ${complexitySelector('quiz-complexity')}
+                    ${countSelector('input-quiz-count', 5)}
+                </div>
+                <button class="btn btn-primary" id="btn-gen-quiz" style="align-self: flex-end; margin-top: 1rem"><ion-icon name="sparkles"></ion-icon> Start New Quiz</button>
             </div>
             <div id="quiz-workspace">
                 ${quizzes.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No assessments completed yet.</p>' : 
@@ -525,13 +561,264 @@ const Views = {
             </div>
         </div>`;
     },
-    overviews: () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Media Overviews</h2><p style="color:var(--text-muted)">Generate comprehensive summaries of your documents.</p></div>`,
-    pathways: () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Mastery Pathways</h2><p style="color:var(--text-muted)">Your personalized curriculum and learning path.</p></div>`,
-    'study-rooms': () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Study Rooms</h2><p style="color:var(--text-muted)">Collaborate with AI peers or real classmates.</p></div>`,
-    'blur-study': () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Blur Study</h2><p style="color:var(--text-muted)">Active recall by blurring out key terms in your notes.</p></div>`,
-    'review-mistakes': () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Review Mistakes</h2><p style="color:var(--text-muted)">Analyze and learn from your previous incorrect answers.</p></div>`,
-    mastery: () => `<div class="glass-panel"><h2 style="font-size: 2rem; margin-bottom: 0.5rem">Mastery Analytics</h2><p style="color:var(--text-muted)">Track your progress, retention, and weak areas over time.</p></div>`
+    overviews: () => {
+        const overviews = AppState.overviews || [];
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Executive Overviews</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate comprehensive summaries, infographics, and data tables from your documents.</p>
+            
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                ${customFocusInput('input-overview-focus')}
+                ${complexitySelector('overview-complexity')}
+            </div>
+
+            <div class="studio-generator-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('summary')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
+                    <ion-icon name="document-text-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>Executive Summary</h3>
+                    <p>High-level brief of key points.</p>
+                </div>
+                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('infographic')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
+                    <ion-icon name="pie-chart-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>Infographic Flow</h3>
+                    <p>Mermaid diagram representation.</p>
+                </div>
+                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('datatable')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
+                    <ion-icon name="grid-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>Data Table</h3>
+                    <p>Structured tabular data extraction.</p>
+                </div>
+            </div>
+            
+            <div id="overview-status" style="margin-top:2rem; text-align:center; font-weight:600; color:var(--accent)"></div>
+            <div id="overview-workspace" class="glass-panel" style="margin-top:2rem; display:none; background: rgba(15,23,42,0.8)"></div>
+            
+            <div id="overview-history" style="margin-top: 3rem">
+                <h3 style="font-size: 1.25rem; margin-bottom: 1rem">Recent Overviews</h3>
+                ${overviews.length === 0 ? '<p style="color:var(--text-muted)">No overviews generated yet.</p>' : 
+                overviews.map((o, i) => `
+                    <div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.03); padding: 1rem;">
+                        <div>
+                            <h4 style="margin:0">${o.type.toUpperCase()} Overview</h4>
+                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${new Date(o.date).toLocaleDateString()}</p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="window.viewOverview(${i})">View</button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    },
+    pathways: () => {
+        const pathways = AppState.pathways || [];
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Mastery Pathways</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Let Gemini build you a step-by-step personalized curriculum from your sources.</p>
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                ${customFocusInput('input-pathway-focus')}
+                ${complexitySelector('pathway-complexity')}
+            </div>
+            <button class="btn btn-primary" id="btn-gen-pathway" style="width:100%"><ion-icon name="map-outline"></ion-icon> Generate Learning Pathway</button>
+            <div id="pathway-status" style="margin-top:1.5rem; text-align:center; font-weight:600; color:var(--accent)"></div>
+            <div id="pathway-workspace" style="margin-top:2rem; display:none;"></div>
+
+            <div style="margin-top: 3rem">
+                <h3 style="font-size: 1.25rem; margin-bottom: 1rem">Saved Pathways</h3>
+                ${pathways.length === 0 ? '<p style="color:var(--text-muted)">No pathways generated yet.</p>' :
+                pathways.map((p, i) => `
+                    <div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.03); padding: 1rem;">
+                        <div>
+                            <h4 style="margin:0">${p.title || 'Learning Pathway'}</h4>
+                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${new Date(p.date).toLocaleDateString()}</p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="window.viewPathway(${i})">View</button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    },
+    'study-rooms': () => {
+        const rooms = AppState.rooms || [];
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Study Rooms Manager</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Manage all your study rooms, sources, and assets in one place.</p>
+            <div style="display:flex; flex-direction: column; gap: 1rem;">
+                ${rooms.length === 0 ? '<p style="color:var(--text-muted); text-align:center; padding:3rem;">No rooms yet. Create one from the Dashboard!</p>' :
+                rooms.map((r, i) => `
+                    <div class="glass-panel" style="background: rgba(255,255,255,0.03); padding: 1.5rem; border-radius: 1.5rem;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem">
+                            <div style="display:flex; align-items:center; gap:0.75rem">
+                                <ion-icon name="folder-open-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                                <h3 style="margin:0">${r.title}</h3>
+                                ${AppState.currentRoomIndex === i ? '<span style="background:rgba(59,130,246,0.2); color:var(--accent); padding:0.2rem 0.75rem; border-radius:2rem; font-size:0.7rem; font-weight:700;">ACTIVE</span>' : ''}
+                            </div>
+                            <div style="display:flex; gap:0.5rem;">
+                                <button class="btn btn-secondary btn-sm" onclick="window.setActiveRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem;">Switch To</button>
+                                <button class="btn btn-secondary btn-sm" onclick="window.renameRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem;">Rename</button>
+                                <button class="btn btn-sm" onclick="window.deleteRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem; background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3);">Delete</button>
+                            </div>
+                        </div>
+                        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;">
+                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                <div style="font-size:1.5rem; font-weight:800; color:var(--accent)">${(r.documents||[]).length}</div>
+                                <div style="font-size:0.7rem; color:var(--text-muted)">Sources</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                <div style="font-size:1.5rem; font-weight:800; color:#10b981">${(r.flashcards||[]).length}</div>
+                                <div style="font-size:0.7rem; color:var(--text-muted)">Decks</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                <div style="font-size:1.5rem; font-weight:800; color:#8b5cf6">${(r.quizzes||[]).length}</div>
+                                <div style="font-size:0.7rem; color:var(--text-muted)">Quizzes</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                <div style="font-size:1.5rem; font-weight:800; color:#f59e0b">${(r.presentations||[]).length}</div>
+                                <div style="font-size:0.7rem; color:var(--text-muted)">Slides</div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            <button class="btn btn-primary" onclick="window.createRoom()" style="margin-top:2rem; width:100%"><ion-icon name="add-outline"></ion-icon> Create New Room</button>
+        </div>`;
+    },
+    'blur-study': () => `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Blur Study: The Semantic Heatmap</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Gemini identifies key terms and blurs them. Move the slider to increase recall difficulty.</p>
+            
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                ${customFocusInput('input-blur-focus')}
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight: 600; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem; display: block;">Recall Mode</label>
+                    <select id="blur-mode" class="form-control">
+                        <option value="blur">Progressive Hiding</option>
+                        <option value="redaction">Redaction Game (Reverse Blur)</option>
+                        <option value="blurt">Full Blurt (Semantic Validation)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="confidence-slider-container" id="blur-difficulty-container">
+                <div style="display:flex; justify-content:space-between; margin-bottom: 0.5rem; font-size: 0.8rem; font-weight:700; color:var(--text-muted);">
+                    <span>NOVICE (Connectives)</span>
+                    <span>INTERMEDIATE (Keywords)</span>
+                    <span>MASTERY (Blank)</span>
+                </div>
+                <input type="range" min="1" max="3" value="1" class="confidence-slider" id="blur-confidence-slider">
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem; text-align:center;">Only active in "Progressive Hiding" mode</p>
+            </div>
+
+            <button class="btn btn-primary" id="btn-gen-blur" style="width:100%; margin-top: 1.5rem;"><ion-icon name="eye-off-outline"></ion-icon> Initialize Study Session</button>
+            
+            <div id="blur-status" style="margin-top:1.5rem; text-align:center; font-weight:600; color:var(--accent)"></div>
+            
+            <div id="blur-workspace" style="margin-top:2rem; display:none;">
+                <div class="glass-panel" id="blur-text-panel" style="background:rgba(255,255,255,0.02); padding:2rem; line-height:2.2; font-size:1.05rem;"></div>
+                
+                <div id="blurt-input-area" class="blurt-input-container" style="display:none">
+                    <h3 style="margin-bottom: 0.5rem">Your Blurt</h3>
+                    <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Type everything you remember about the topic below. Gemini will validate your semantic understanding.</p>
+                    <textarea id="blurt-textarea" class="blurt-textarea" placeholder="Start typing what you remember..."></textarea>
+                    <button class="btn btn-primary" id="btn-validate-blurt"><ion-icon name="checkmark-done-outline"></ion-icon> Validate My Recall</button>
+                </div>
+
+                <div id="redaction-controls" style="display:none; margin-top: 1.5rem; text-align:center;">
+                    <p style="color:var(--text-muted); font-size: 0.85rem;">Click words to delete "fluff". Keep only the core meaning.</p>
+                    <div id="redaction-score" style="font-size: 1.5rem; font-weight: 800; color: var(--accent); margin-top: 1rem;">Reduction: 0%</div>
+                </div>
+            </div>
+        </div>`,
+    'review-mistakes': () => {
+        const wrongAnswers = AppState.wrongAnswers || [];
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Review Mistakes</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Your personal mistake bank — every wrong quiz answer is saved here for targeted review.</p>
+            ${wrongAnswers.length === 0 ? `
+                <div style="text-align:center; padding:4rem; color:var(--text-muted);">
+                    <ion-icon name="checkmark-circle-outline" style="font-size:4rem; color:var(--success); display:block; margin-bottom:1rem;"></ion-icon>
+                    <p style="font-size:1.1rem;">Your mistake bank is empty! Complete some quizzes to start tracking errors.</p>
+                </div>` : `
+                <button class="btn btn-primary" id="btn-analyze-mistakes" style="margin-bottom:2rem;"><ion-icon name="sparkles"></ion-icon> AI Tutor Analysis</button>
+                <div id="analysis-workspace" style="display:none; margin-bottom:2rem;" class="glass-panel"></div>
+                <div style="display:flex; flex-direction:column; gap: 0.75rem;">
+                    ${wrongAnswers.map((w, i) => `
+                        <div class="glass-panel" style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); padding: 1.25rem; border-radius:1.5rem;">
+                            <p style="font-weight:600; margin-bottom:0.5rem;">❌ ${w.question}</p>
+                            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.25rem;">Your answer: <span style="color:#ef4444">${w.yourAnswer}</span></p>
+                            <p style="font-size:0.85rem;">Correct: <span style="color:var(--success); font-weight:600">${w.correctAnswer}</span></p>
+                        </div>
+                    `).join('')}
+                </div>
+                <button class="btn" onclick="window.clearMistakes()" style="margin-top:1.5rem; background:rgba(239,68,68,0.1); color:#ef4444; border:1px solid rgba(239,68,68,0.2); border-radius:2rem;">Clear All Mistakes</button>
+            `}
+        </div>`;
+    },
+    mastery: () => {
+        const quizzes = AppState.quizzes || [];
+        const flashcards = AppState.flashcards || [];
+        const presentations = AppState.presentations || [];
+        const wrongAnswers = AppState.wrongAnswers || [];
+        const avgScore = quizzes.length > 0 ? Math.round(quizzes.reduce((a, q) => a + (q.score || 0), 0) / quizzes.length) : 0;
+        const totalCards = flashcards.reduce((a, d) => a + (d.cards ? d.cards.length : 0), 0);
+        const masteryColor = avgScore >= 80 ? 'var(--success)' : avgScore >= 50 ? '#f59e0b' : '#ef4444';
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Mastery Analytics</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Track your study progress, retention, and performance over time.</p>
+
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 2rem;">
+                <div class="glass-panel" style="background:rgba(59,130,246,0.1); border-color:rgba(59,130,246,0.3); text-align:center; padding:1.5rem; border-radius:1.5rem;">
+                    <div style="font-size:3rem; font-weight:900; color:var(--accent);">${quizzes.length}</div>
+                    <div style="color:var(--text-muted); font-size:0.85rem;">Quizzes Taken</div>
+                </div>
+                <div class="glass-panel" style="background:rgba(16,185,129,0.1); border-color:rgba(16,185,129,0.3); text-align:center; padding:1.5rem; border-radius:1.5rem;">
+                    <div style="font-size:3rem; font-weight:900; color:#10b981;">${totalCards}</div>
+                    <div style="color:var(--text-muted); font-size:0.85rem;">Flashcards Studied</div>
+                </div>
+                <div class="glass-panel" style="background:rgba(139,92,246,0.1); border-color:rgba(139,92,246,0.3); text-align:center; padding:1.5rem; border-radius:1.5rem;">
+                    <div style="font-size:3rem; font-weight:900; color:#8b5cf6;">${presentations.length}</div>
+                    <div style="color:var(--text-muted); font-size:0.85rem;">Presentations</div>
+                </div>
+            </div>
+
+            <div class="glass-panel" style="background:rgba(255,255,255,0.02); border-radius:1.5rem; padding:2rem; margin-bottom:1.5rem;">
+                <h3 style="margin-bottom:1.5rem;">Overall Mastery Score</h3>
+                <div style="display:flex; align-items:center; gap:1.5rem;">
+                    <div style="font-size:4rem; font-weight:900; color:${masteryColor};">${avgScore}%</div>
+                    <div style="flex:1;">
+                        <div style="height:12px; background:rgba(255,255,255,0.1); border-radius:2rem; overflow:hidden;">
+                            <div style="height:100%; width:${avgScore}%; background:${masteryColor}; border-radius:2rem; transition:width 1s ease;"></div>
+                        </div>
+                        <p style="color:var(--text-muted); margin-top:0.5rem; font-size:0.85rem;">Average across ${quizzes.length} quiz${quizzes.length !== 1 ? 'zes' : ''}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-panel" style="background:rgba(239,68,68,0.05); border-color:rgba(239,68,68,0.2); border-radius:1.5rem; padding:1.5rem;">
+                <h3 style="margin-bottom:0.5rem;">Mistakes Logged</h3>
+                <p style="color:var(--text-muted); font-size:0.9rem;">${wrongAnswers.length} incorrect answer${wrongAnswers.length !== 1 ? 's' : ''} recorded. <a onclick="window.navigate('review-mistakes')" style="color:var(--accent); cursor:pointer; font-weight:600;">Review them →</a></p>
+            </div>
+
+            ${quizzes.length > 0 ? `
+            <div style="margin-top:2rem;">
+                <h3 style="font-size:1.1rem; margin-bottom:1rem;">Quiz History</h3>
+                <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                    ${quizzes.slice().reverse().map((q, i) => `
+                        <div style="display:flex; justify-content:space-between; align-items:center; padding:0.75rem 1.25rem; background:rgba(255,255,255,0.03); border-radius:1rem; border:1px solid var(--border-color);">
+                            <span style="font-size:0.9rem;">${q.title || 'Quiz'}</span>
+                            <span style="font-weight:700; color:${(q.score||0) >= 70 ? 'var(--success)' : '#ef4444'};">${q.score||0}%</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>` : ''}
+        </div>`;
+    }
 };
+
 
 // ==========================================
 // CORE LOGIC & NAVIGATION
@@ -573,19 +860,24 @@ const bindViewEvents = (route) => {
             
             try {
                 const parts = getActiveContextParts();
+                const focus = document.getElementById('input-studio-focus').value;
+                const complexity = document.getElementById('studio-complexity').value;
+                const count = document.getElementById('input-studio-count').value || 5;
+                const complexityInstruction = getComplexityModifier(complexity);
+                const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
                 
                 if (type === 'presentation') {
-                    parts.push({ text: `Create a 5-slide academic presentation. Return ONLY valid JSON matching this exact structure, no markdown, no extra text: {"slides":[{"title":"string","subtitle":"string","bullets":["string"]}]}` });
+                    parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} academic presentation slides based on the context. Return ONLY valid JSON matching this exact structure, no markdown, no extra text: {"slides":[{"title":"string","subtitle":"string","content":"2-3 sentence detailed explanation for this slide","bullets":["key point 1","key point 2","key point 3"]}]}` });
                     const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON, no markdown fences, no explanation.", null, "application/json");
                     const deck = parseJsonSafe(res);
                     deck.date = new Date().toISOString();
                     AppState.presentations.push(deck);
                     saveState('presentations', AppState.presentations);
-                    window.navigate('studio');
-                    document.getElementById('studio-workspace').style.display = 'block';
-                    window.renderPresentation(deck);
+                    const newIdx = AppState.presentations.length - 1;
+                    statusEl.textContent = "";
+                    window.viewPresentation(newIdx);
                 } else {
-                    parts.push({ text: `Create a Mermaid graph TD. Output raw syntax.` });
+                    parts.push({ text: `${complexityInstruction}${focusInstruction}Create a Mermaid graph TD representing a Neural Map / Mind Map of the key concepts in the context. Output raw syntax ONLY. Do NOT use markdown code blocks.` });
                     const res = await callGemini(parts, "Mermaid expert.");
                     workspace.innerHTML = `<div class="mermaid">${res}</div>`;
                     if (window.mermaid) mermaid.init(undefined, workspace.querySelectorAll('.mermaid'));
@@ -620,11 +912,15 @@ const bindViewEvents = (route) => {
         document.getElementById('btn-gen-flashcards').onclick = async () => {
             if(AppState.activeSourceIndices.length === 0) return showToast("Select active sources first", "error");
             const count = document.getElementById('input-card-count').value || 10;
+            const focus = document.getElementById('input-flashcard-focus').value;
+            const complexity = document.getElementById('flashcard-complexity').value;
             showToast("Gemini is curating your mastery deck...");
             try {
                 const parts = getActiveContextParts();
-                parts.push({ text: `Create exactly ${count} flashcards from the source material. Return ONLY raw valid JSON, no markdown: {"cards":[{"term":"string","definition":"string"}]}` });
-                const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON, no markdown fences, no explanation.", null, "application/json");
+                const complexityInstruction = getComplexityModifier(complexity);
+                const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+                parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} flashcards from the source material. For each card, provide a term, a clear definition, and a 'mnemonic' (a surreal, memorable image description or memory hook to help remember it). Also include an 'imagePrompt' (a short DALL-E style prompt for a surreal illustration of the concept). Return ONLY raw valid JSON: {"cards":[{"term":"string","definition":"string","mnemonic":"string","imagePrompt":"string"}]}` });
+                const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON.", null, "application/json");
                 const deck = parseJsonSafe(res);
                 deck.title = "Mastery Deck " + new Date().toLocaleDateString();
                 deck.date = new Date().toISOString();
@@ -638,10 +934,15 @@ const bindViewEvents = (route) => {
     if (route === 'quizzes') {
         document.getElementById('btn-gen-quiz').onclick = async () => {
             if(AppState.activeSourceIndices.length === 0) return showToast("Select active sources first", "error");
+            const count = document.getElementById('input-quiz-count').value || 5;
+            const focus = document.getElementById('input-quiz-focus').value;
+            const complexity = document.getElementById('quiz-complexity').value;
             showToast("Gemini is drafting an assessment...");
             try {
                 const parts = getActiveContextParts();
-                parts.push({ text: `Create a 5-question multiple choice quiz from the source material. Return ONLY raw valid JSON, no markdown: {"title":"Quiz Title","questions":[{"q":"Question text","options":["A","B","C","D"],"correct":0}]}` });
+                const complexityInstruction = getComplexityModifier(complexity);
+                const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+                parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} multiple choice questions from the source material. Return ONLY raw valid JSON, no markdown: {"title":"Quiz Title","questions":[{"q":"Question text","options":["A","B","C","D"],"correct":0}]}` });
                 const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON, no markdown fences, no explanation.", null, "application/json");
                 const quiz = parseJsonSafe(res);
                 quiz.date = new Date().toISOString();
@@ -652,59 +953,291 @@ const bindViewEvents = (route) => {
             } catch (e) { showToast(e.message, "error"); }
         };
     }
+    
+    if (route === 'overviews') {
+        window.generateOverview = async (type) => {
+            if(AppState.activeSourceIndices.length === 0) return showToast("Select sources first", "error");
+            const statusEl = document.getElementById('overview-status');
+            const workspace = document.getElementById('overview-workspace');
+            workspace.style.display = 'block';
+            workspace.innerHTML = '';
+            statusEl.textContent = `Synthesizing ${type}...`;
+            
+            try {
+                const parts = getActiveContextParts();
+                const focus = document.getElementById('input-overview-focus').value;
+                const complexity = document.getElementById('overview-complexity').value;
+                const complexityInstruction = getComplexityModifier(complexity);
+                const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+                
+                let prompt = "";
+                let systemInstruction = "You are an expert academic analyst.";
+                
+                if (type === 'summary') {
+                    prompt = `${complexityInstruction}${focusInstruction}Write a highly detailed, extremely comprehensive executive summary of the provided context. Use markdown headers, bullet points, and bold text for emphasis. Do NOT output JSON. Output pure Markdown.`;
+                } else if (type === 'infographic') {
+                    prompt = `${complexityInstruction}${focusInstruction}Create a Mermaid flowchart (graph TD) that visualizes the main workflow, relationships, or timeline described in the text. Output raw syntax ONLY. Do NOT use markdown code blocks.`;
+                    systemInstruction = "Mermaid expert. Output raw syntax ONLY.";
+                } else if (type === 'datatable') {
+                    prompt = `${complexityInstruction}${focusInstruction}Extract all quantitative data, lists of items, comparisons, or structured information from the text and present it as a Markdown Table. If there is no explicit data, synthesize a comparison table of the key concepts. Output pure Markdown.`;
+                }
+                
+                parts.push({ text: prompt });
+                const res = await callGemini(parts, systemInstruction);
+                
+                const overview = { type, content: res, date: new Date().toISOString() };
+                AppState.overviews = AppState.overviews || [];
+                AppState.overviews.push(overview);
+                saveState('overviews', AppState.overviews);
+                
+                window.navigate('overviews');
+                window.viewOverview(AppState.overviews.length - 1);
+                
+                statusEl.textContent = "";
+            } catch (e) { statusEl.textContent = e.message; }
+        };
+    }
+
+    if (route === 'pathways') {
+        document.getElementById('btn-gen-pathway').onclick = async () => {
+            if(AppState.activeSourceIndices.length === 0) return showToast("Select sources first", "error");
+            const statusEl = document.getElementById('pathway-status');
+            const workspace = document.getElementById('pathway-workspace');
+            workspace.style.display = 'block';
+            workspace.innerHTML = '';
+            statusEl.textContent = "Architecting your learning pathway...";
+            
+            const focus = document.getElementById('input-pathway-focus').value;
+            const complexity = document.getElementById('pathway-complexity').value;
+            const complexityInstruction = getComplexityModifier(complexity);
+            const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+            
+            try {
+                const parts = getActiveContextParts();
+                parts.push({ text: `${complexityInstruction}${focusInstruction}Create a structured, step-by-step learning pathway or curriculum to help a student master the content in the provided sources. Divide it into clearly numbered phases or modules (e.g., Phase 1: Foundations, Phase 2: Core Concepts, etc.). For each phase, list specific sub-topics and suggested study activities. Output in rich Markdown format with headers, bullet points, and emojis.` });
+                const res = await callGemini(parts, "You are an expert academic curriculum designer.");
+                
+                const pathway = { title: "Learning Pathway", content: res, date: new Date().toISOString() };
+                AppState.pathways = AppState.pathways || [];
+                AppState.pathways.push(pathway);
+                saveState('pathways', AppState.pathways);
+                
+                workspace.innerHTML = `<div class="glass-panel" style="background:rgba(255,255,255,0.02);">${marked.parse(res)}</div>`;
+                statusEl.textContent = "";
+                showToast("Pathway generated!");
+            } catch (e) { statusEl.textContent = e.message; }
+        };
+    }
+
+    if (route === 'blur-study') {
+        document.getElementById('btn-gen-blur').onclick = async () => {
+            if(AppState.activeSourceIndices.length === 0) return showToast("Select sources first", "error");
+            const statusEl = document.getElementById('blur-status');
+            const workspace = document.getElementById('blur-workspace');
+            const textPanel = document.getElementById('blur-text-panel');
+            const blurtArea = document.getElementById('blurt-input-area');
+            const redactionControls = document.getElementById('redaction-controls');
+            const slider = document.getElementById('blur-confidence-slider');
+            const mode = document.getElementById('blur-mode').value;
+
+            workspace.style.display = 'block';
+            textPanel.innerHTML = '';
+            blurtArea.style.display = 'none';
+            redactionControls.style.display = 'none';
+            statusEl.textContent = "Synthesizing study session...";
+            
+            const focus = document.getElementById('input-blur-focus').value;
+            const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+            
+            try {
+                const parts = getActiveContextParts();
+                let prompt = "";
+                if (mode === 'redaction') {
+                    prompt = `${focusInstruction}Write a 2-paragraph highly detailed explanation of the core concepts in the source. Do NOT use tags. Just plain text.`;
+                } else {
+                    prompt = `${focusInstruction}Write a 3-paragraph study summary of the content. Then, wrap EVERY important keyword, date, name, and concept in [KEY]word[/KEY] tags. Also wrap EVERY connective word (and, the, but, of, to, in, with) in [CON]word[/CON] tags. Output plain text only. Example: "[CON]The[/CON] [KEY]mitochondria[/KEY] [CON]is[/CON] [CON]the[/CON] [KEY]powerhouse[/KEY] [CON]of[/CON] [CON]the[/CON] [KEY]cell[/KEY]."`;
+                }
+                
+                parts.push({ text: prompt });
+                const res = await callGemini(parts, "You are a study material expert.");
+                AppState.currentBlurText = res; // Save raw text for validation
+
+                if (mode === 'redaction') {
+                    redactionControls.style.display = 'block';
+                    const words = res.split(/\s+/);
+                    textPanel.classList.add('redaction-mode');
+                    textPanel.innerHTML = words.map(w => `<span class="fluff-word" onclick="this.classList.toggle('deleted'); window.updateRedactionScore()">${w}</span>`).join(' ');
+                    window.updateRedactionScore = () => {
+                        const total = textPanel.querySelectorAll('.fluff-word').length;
+                        const deleted = textPanel.querySelectorAll('.fluff-word.deleted').length;
+                        const pct = Math.round((deleted / total) * 100);
+                        document.getElementById('redaction-score').textContent = `Reduction: ${pct}%`;
+                        if (pct > 70) document.getElementById('redaction-score').style.color = 'var(--warning)';
+                        if (pct > 85) document.getElementById('redaction-score').style.color = 'var(--success)';
+                    };
+                } else if (mode === 'blurt') {
+                    blurtArea.style.display = 'block';
+                    textPanel.innerHTML = `<div style="filter: blur(20px); opacity: 0.3; user-select: none;">${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}</div>`;
+                    
+                    document.getElementById('btn-validate-blurt').onclick = async () => {
+                        const userBlurt = document.getElementById('blurt-textarea').value;
+                        if (!userBlurt) return showToast("Type something first!", "error");
+                        statusEl.textContent = "Gemini is validating your understanding...";
+                        try {
+                            const valRes = await callGemini([
+                                { text: `SOURCE TEXT:\n${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}\n\nUSER RECALL:\n${userBlurt}\n\nCompare the user's recall with the source. Identify which key concepts they GOT RIGHT and which they MISSED or MISUNDERSTOOD. Return a JSON object: {"score": 0-100, "feedback": "overall feedback", "gotRight": ["concept1", "concept2"], "missed": ["concept3"]}` }
+                            ], "You are a Socratic validator. Use semantic similarity to judge if the user 'got the concept' even if words differ.", null, "application/json");
+                            
+                            const valData = parseJsonSafe(valRes);
+                            textPanel.style.filter = 'none';
+                            textPanel.style.opacity = '1';
+                            
+                            // Highlight the source text with semantic heatmap
+                            let highlightedText = res.replace(/\[CON\]|\[\/CON\]/g, '');
+                            valData.gotRight.forEach(concept => {
+                                const reg = new RegExp(`(${concept})`, 'gi');
+                                highlightedText = highlightedText.replace(reg, `<span class="blur-term correct revealed">$1</span>`);
+                            });
+                            valData.missed.forEach(concept => {
+                                const reg = new RegExp(`(${concept})`, 'gi');
+                                highlightedText = highlightedText.replace(reg, `<span class="blur-term missed revealed">$1</span>`);
+                            });
+                            // Clean up remaining tags
+                            highlightedText = highlightedText.replace(/\[KEY\](.*?)\[\/KEY\]/g, '<span class="blur-term revealed">$1</span>');
+                            
+                            textPanel.innerHTML = `
+                                <div class="glass-panel" style="margin-bottom: 1.5rem; border-color: var(--accent);">
+                                    <h3 style="color:var(--accent)">Recall Score: ${valData.score}%</h3>
+                                    <p>${valData.feedback}</p>
+                                </div>
+                                <div>${highlightedText}</div>
+                            `;
+                            statusEl.textContent = "";
+                        } catch (e) { statusEl.textContent = e.message; }
+                    };
+                } else {
+                    // Normal Blur Mode with Slider
+                    const updateBlur = () => {
+                        const val = parseInt(slider.value);
+                        let html = res;
+                        if (val >= 1) { // Novice: hide connectives
+                            html = html.replace(/\[CON\](.*?)\[\/CON\]/g, `<span class="blur-term ${val === 1 ? '' : 'revealed'}">$1</span>`);
+                        } else {
+                            html = html.replace(/\[CON\]|\[\/CON\]/g, '');
+                        }
+                        
+                        if (val >= 2) { // Intermediate: hide keywords
+                            html = html.replace(/\[KEY\](.*?)\[\/KEY\]/g, `<span class="blur-term">$1</span>`);
+                        } else {
+                            html = html.replace(/\[KEY\]|\[\/KEY\]/g, '');
+                        }
+                        
+                        if (val === 3) { // Mastery: Blank
+                             textPanel.style.filter = 'blur(30px)';
+                             textPanel.style.opacity = '0.1';
+                        } else {
+                             textPanel.style.filter = 'none';
+                             textPanel.style.opacity = '1';
+                        }
+                        
+                        textPanel.innerHTML = html;
+                        // Add click listeners to reveal
+                        textPanel.querySelectorAll('.blur-term').forEach(el => {
+                            el.onclick = () => el.classList.toggle('revealed');
+                        });
+                    };
+                    slider.oninput = updateBlur;
+                    updateBlur();
+                }
+                statusEl.textContent = "";
+            } catch (e) { statusEl.textContent = e.message; }
+        };
+    }
+
+    if (route === 'review-mistakes') {
+        const analyzeBtn = document.getElementById('btn-analyze-mistakes');
+        if (analyzeBtn) {
+            analyzeBtn.onclick = async () => {
+                const workspace = document.getElementById('analysis-workspace');
+                workspace.style.display = 'block';
+                workspace.innerHTML = '<p style="color:var(--accent); text-align:center; padding:1rem;">AI Tutor is analyzing your mistakes...</p>';
+                try {
+                    const mistakes = AppState.wrongAnswers || [];
+                    const mistakeText = mistakes.map(w => `Q: ${w.question}\nYou answered: ${w.yourAnswer}\nCorrect answer: ${w.correctAnswer}`).join('\n\n');
+                    const res = await callGemini(
+                        [{ text: `Here are a student's incorrect quiz answers:\n\n${mistakeText}\n\nProvide a compassionate, encouraging AI tutor analysis. For each mistake, explain WHY the correct answer is right, what concept the student likely misunderstood, and a memory trick or analogy to remember it. Format in clear Markdown.` }],
+                        "You are a compassionate, expert AI tutor."
+                    );
+                    workspace.innerHTML = `<div style="padding:1rem;">${marked.parse(res)}</div>`;
+                } catch (e) { workspace.innerHTML = `<p style="color:var(--error); padding:1rem;">${e.message}</p>`; }
+            };
+        }
+    }
+};
+
+
+
+window.viewOverview = (idx) => {
+    const overview = AppState.overviews[idx];
+    if (!overview) return;
+    const workspace = document.getElementById('overview-workspace');
+    workspace.style.display = 'block';
+    workspace.innerHTML = '';
+    
+    if (overview.type === 'infographic') {
+        workspace.innerHTML = `<div class="mermaid">${overview.content}</div>`;
+        if (window.mermaid) mermaid.init(undefined, workspace.querySelectorAll('.mermaid'));
+    } else if (overview.type === 'datatable') {
+        workspace.innerHTML = `
+            <div style="margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+                <input type="text" id="table-pivot-query" class="form-control" placeholder="Pivot by concept (e.g. 'Most relevant to environmental impact')...">
+                <button class="btn btn-primary btn-sm" id="btn-pivot-table"><ion-icon name="swap-vertical-outline"></ion-icon> Pivot</button>
+            </div>
+            <div id="table-container" class="markdown-body">${marked.parse(overview.content)}</div>
+        `;
+        document.getElementById('btn-pivot-table').onclick = async () => {
+            const query = document.getElementById('table-pivot-query').value;
+            if (!query) return;
+            showToast("Pivoting by concept...");
+            try {
+                const res = await callGemini([{ text: `TABLE DATA:\n${overview.content}\n\nPIVOT QUERY: ${query}\n\nReorder the rows of this table based on the pivot query (semantic relevance). Return the entire table, reordered. Return ONLY Markdown.` }], "Data analyst.");
+                document.getElementById('table-container').innerHTML = marked.parse(res);
+            } catch (e) { showToast(e.message, "error"); }
+        };
+    } else {
+        workspace.innerHTML = `<div style="padding: 1rem;" class="markdown-body">${marked.parse(overview.content)}</div>`;
+    }
+    window.scrollTo({ top: workspace.offsetTop - 100, behavior: 'smooth' });
 };
 
 
 window.viewPresentation = (idx) => {
     const deck = AppState.presentations[idx];
     if (!deck) return;
-    document.getElementById('studio-workspace').style.display = 'block';
-    window.renderPresentation(deck);
-    window.scrollTo({ top: document.getElementById('studio-workspace').offsetTop - 100, behavior: 'smooth' });
-};
-
-window.renderPresentation = (deck) => {
-    const workspace = document.getElementById('studio-workspace');
-    let currentSlide = 0;
-
-    const render = () => {
-        workspace.innerHTML = `
-            <div class="slide-carousel">
-                ${deck.slides.map((s, i) => `
-                    <div class="slide ${i === currentSlide ? 'active' : (i < currentSlide ? 'prev' : '')}">
-                        <h2 class="slide-title">${s.title}</h2>
-                        ${s.subtitle ? `<h3 class="slide-subtitle">${s.subtitle}</h3>` : ''}
-                        <div class="slide-content">
-                            <ul>
-                                ${s.bullets.map(b => `<li>${b}</li>`).join('')}
-                            </ul>
-                        </div>
+    const contentArea = document.getElementById('content-area');
+    contentArea.innerHTML = `
+    <div class="view-section active">
+        <div class="glass-panel" style="max-width:900px; margin:0 auto;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+                <button class="btn btn-secondary btn-sm" onclick="window.navigate('studio')" style="border-radius:2rem;">← Back to Studio</button>
+                <h2 style="font-size:1.5rem; margin:0">${deck.slides && deck.slides[0] ? deck.slides[0].title : 'Presentation'}</h2>
+            </div>
+            <div class="scrolly-container">
+                ${(deck.slides || []).map((s, i) => `
+                    <div class="scrolly-slide" id="slide-${i}">
+                        <div style="color:var(--accent); font-weight:800; font-size:0.8rem; text-transform:uppercase; margin-bottom:1rem; letter-spacing:0.1rem;">Slide ${i+1}</div>
+                        <h2>${s.title || ''}</h2>
+                        ${s.subtitle ? `<h3 style="color:var(--text-muted); font-size:1.1rem; margin-bottom:1rem">${s.subtitle}</h3>` : ''}
+                        ${s.content ? `<p style="margin-bottom:1rem">${s.content}</p>` : ''}
+                        ${s.bullets && s.bullets.length ? `<ul style="text-align:left; padding-left:1.5rem; color:var(--text-muted);">${s.bullets.map(b => `<li style="margin-bottom:0.5rem">${b}</li>`).join('')}</ul>` : ''}
                     </div>
                 `).join('')}
-                <div class="slide-controls">
-                    <button id="prev-slide" ${currentSlide === 0 ? 'style="opacity:0.5; pointer-events:none"' : ''}><ion-icon name="chevron-back-outline"></ion-icon></button>
-                    <div style="color:white; font-weight:800; display:flex; align-items:center; padding: 0 1rem;">${currentSlide + 1} / ${deck.slides.length}</div>
-                    <button id="next-slide" ${currentSlide === deck.slides.length - 1 ? 'style="opacity:0.5; pointer-events:none"' : ''}><ion-icon name="chevron-forward-outline"></ion-icon></button>
-                </div>
             </div>
-        `;
-
-        document.getElementById('prev-slide').onclick = () => {
-            if (currentSlide > 0) {
-                currentSlide--;
-                render();
-            }
-        };
-        document.getElementById('next-slide').onclick = () => {
-            if (currentSlide < deck.slides.length - 1) {
-                currentSlide++;
-                render();
-            }
-        };
-    };
-
-    render();
+            <p style="text-align:center; margin-top:1.5rem; color:var(--text-muted); font-size:0.85rem;">💡 Scroll between slides for cinematic experience</p>
+        </div>
+    </div>`;
 };
+
 
 window.setActiveRoom = (idx) => {
     AppState.currentRoomIndex = idx;
@@ -719,28 +1252,115 @@ window.setActiveRoom = (idx) => {
 window.studyDeck = (idx) => {
     const deck = AppState.flashcards[idx];
     const workspace = document.getElementById('flashcard-workspace');
+    if (!deck) return;
     let current = 0;
+
+    // Define enhanceDefinition FIRST before render() uses it
+    window.enhanceDefinition = (text) => {
+        if (!text) return '';
+        const words = text.split(' ');
+        return words.map(w => {
+            if (w.length > 6 && Math.random() > 0.65) return `<span class="fractal-term" title="Click to drill into this concept">${w.replace(/[.,;:]/g, '')}</span>`;
+            return w;
+        }).join(' ');
+    };
+
     const render = () => {
         const card = deck.cards[current];
         workspace.innerHTML = `
-            <div class="glass-panel" style="text-align:center; padding: 3rem; background: rgba(255,255,255,0.05)">
-                <h3>${card.term}</h3>
-                <hr style="margin: 2rem 0; opacity: 0.1">
-                <div id="card-back" style="display:none">
-                    <p style="font-size: 1.2rem">${card.definition}</p>
+            <div style="max-width: 560px; margin: 0 auto;">
+                <!-- Card flip wrapper -->
+                <div id="card-face-front" class="glass-panel" style="text-align:center; padding: 4rem 3rem; background: rgba(255,255,255,0.05); min-height: 300px; display: flex; flex-direction: column; justify-content: center; cursor: pointer; border-radius: 1.5rem; transition: all 0.3s;">
+                    <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.1rem; margin-bottom:1.5rem;">Card ${current + 1} / ${deck.cards.length}</div>
+                    <h2 style="font-size: 2rem; margin:0; line-height:1.3">${card.term}</h2>
+                    <p style="margin-top: 1.5rem; color: var(--text-muted); font-size: 0.8rem">Click anywhere to reveal definition</p>
                 </div>
-                <button class="btn btn-secondary" onclick="document.getElementById('card-back').style.display='block'">Show Answer</button>
-                <div style="display:flex; justify-content:space-between; margin-top: 3rem">
-                    <button class="btn btn-sm" onclick="window.navigate('flashcards')">Exit</button>
-                    <div>
-                        <button class="btn btn-sm" ${current === 0 ? 'disabled' : ''} id="prev-card">Prev</button>
-                        <button class="btn btn-sm" ${current === deck.cards.length - 1 ? 'disabled' : ''} id="next-card">Next</button>
+                <div id="card-face-back" style="display:none">
+                    <div class="glass-panel" style="text-align:left; padding: 2rem; background: rgba(59,130,246,0.05); border-color: rgba(59,130,246,0.3); min-height: 300px; border-radius: 1.5rem;">
+                        <div style="font-size:0.75rem; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:0.1rem; margin-bottom:1rem;">${card.term}</div>
+                        <p style="font-size: 1.1rem; line-height: 1.8" id="card-definition-text">${window.enhanceDefinition(card.definition)}</p>
+                        ${card.mnemonic ? `<div class="mnemonic-pill" style="margin-top:1.5rem;">💡 <strong>Memory Hook:</strong> ${card.mnemonic}</div>` : ''}
+                        <button class="btn btn-secondary" style="margin-top:1.5rem; width:100%;" id="btn-deep-dive">🔭 Deep Dive (AI Analysis)</button>
+                    </div>
+                </div>
+                <div id="card-face-depth" style="display:none">
+                    <div class="glass-panel" style="background: rgba(139,92,246,0.08); border-color: rgba(139,92,246,0.3); padding: 2rem; border-radius: 1.5rem; min-height: 300px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                            <h3 id="depth-title" style="color:#8b5cf6; margin:0">Deep Dive: ${card.term}</h3>
+                            <button class="btn btn-secondary btn-sm" onclick="window.flipDepthBack()">← Back</button>
+                        </div>
+                        <div id="depth-content" class="markdown-body" style="font-size: 0.95rem; line-height: 1.7;">
+                            <p style="color:var(--text-muted)">Loading AI analysis...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top: 1.5rem">
+                    <button class="btn btn-secondary btn-sm" onclick="window.navigate('flashcards')">← Exit Deck</button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-secondary btn-sm" ${current === 0 ? 'disabled' : ''} id="prev-card">← Prev</button>
+                        <button class="btn btn-secondary btn-sm" ${current === deck.cards.length - 1 ? 'disabled' : ''} id="next-card">Next →</button>
                     </div>
                 </div>
             </div>`;
+
+        const faceFront = document.getElementById('card-face-front');
+        const faceBack = document.getElementById('card-face-back');
+        const faceDepth = document.getElementById('card-face-depth');
+
+        // Click front card to flip to back
+        faceFront.onclick = () => {
+            faceFront.style.display = 'none';
+            faceBack.style.display = 'block';
+        };
+
+        // Click on fractal terms within the back face
+        faceBack.addEventListener('click', (e) => {
+            if (e.target.classList.contains('fractal-term')) {
+                window.drillFractal(e.target.textContent);
+            }
+        });
+
+        // Deep dive button
+        document.getElementById('btn-deep-dive').onclick = () => window.flipToDepth();
+
+        window.flipToDepth = async () => {
+            faceBack.style.display = 'none';
+            faceDepth.style.display = 'block';
+            if (!card.depthInfo) {
+                try {
+                    const depthRes = await callGemini([{ text: `Term: ${card.term}\nDefinition: ${card.definition}\n\nProvide a deep-dive technical explanation, including sub-components, real-world applications, common misconceptions, and advanced nuances. Format in clear Markdown.` }], "You are an expert tutor providing in-depth analysis.");
+                    card.depthInfo = depthRes;
+                    document.getElementById('depth-content').innerHTML = marked.parse(depthRes);
+                } catch (e) { document.getElementById('depth-content').innerHTML = `<p style="color:var(--error)">${e.message}</p>`; }
+            } else {
+                document.getElementById('depth-content').innerHTML = marked.parse(card.depthInfo);
+            }
+        };
+
+        window.flipDepthBack = () => {
+            faceDepth.style.display = 'none';
+            faceBack.style.display = 'block';
+        };
+
+        window.drillFractal = async (term) => {
+            const depthTitle = document.getElementById('depth-title');
+            const depthContent = document.getElementById('depth-content');
+            if (!depthTitle || !depthContent) return;
+            depthTitle.textContent = `Drilling: ${term}`;
+            depthContent.innerHTML = '<p style="color:var(--text-muted)">Scaling down concept layers...</p>';
+            faceBack.style.display = 'none';
+            faceDepth.style.display = 'block';
+            try {
+                const res = await callGemini([{ text: `Analyze the sub-term "${term}" within the context of the main concept "${card.term}". Definition of the parent concept: ${card.definition}. Provide a concise expert-level deep dive into this specific sub-concept. Format in Markdown.` }], "Fractal educator.");
+                depthContent.innerHTML = marked.parse(res);
+            } catch (e) { depthContent.innerHTML = `<p style="color:var(--error)">${e.message}</p>`; }
+        };
+
         document.getElementById('prev-card').onclick = () => { if(current > 0) { current--; render(); } };
         document.getElementById('next-card').onclick = () => { if(current < deck.cards.length - 1) { current++; render(); } };
     };
+
     render();
 };
 
@@ -761,11 +1381,258 @@ window.signOutUser = () => {
 };
 
 window.setComplexity = (el, id) => {
-    document.querySelectorAll('.complexity-pill').forEach(c => c.classList.remove('active'));
+    // Only update pills within the same container
+    const container = el.closest('.complexity-pill-container');
+    if (container) container.querySelectorAll('.complexity-pill').forEach(c => c.classList.remove('active'));
     el.classList.add('active');
     const input = document.getElementById(id);
     if (input) input.value = el.dataset.value;
 };
+
+window.renameRoom = (idx) => {
+    const room = AppState.rooms[idx];
+    if (!room) return;
+    const newTitle = prompt("Enter new room name:", room.title);
+    if (!newTitle || newTitle === room.title) return;
+    AppState.rooms[idx].title = newTitle;
+    saveState('rooms', AppState.rooms);
+    window.navigate('study-rooms');
+    showToast("Room renamed!");
+};
+
+window.deleteRoom = (idx) => {
+    if (!confirm(`Delete room "${AppState.rooms[idx].title}"? This will permanently erase all its data.`)) return;
+    AppState.rooms.splice(idx, 1);
+    if (AppState.currentRoomIndex === idx) {
+        AppState.currentRoomIndex = AppState.rooms.length > 0 ? 0 : -1;
+        localStorage.setItem('lumina_currentRoomIndex', JSON.stringify(AppState.currentRoomIndex));
+    } else if (AppState.currentRoomIndex > idx) {
+        AppState.currentRoomIndex--;
+        localStorage.setItem('lumina_currentRoomIndex', JSON.stringify(AppState.currentRoomIndex));
+    }
+    saveState('rooms', AppState.rooms);
+    window.navigate('study-rooms');
+    showToast("Room deleted.");
+};
+
+window.clearMistakes = () => {
+    if (!confirm("Clear all mistakes from your bank?")) return;
+    saveState('wrongAnswers', []);
+    window.navigate('review-mistakes');
+    showToast("Mistake bank cleared!");
+};
+
+window.viewPathway = (idx) => {
+    const pathway = AppState.pathways[idx];
+    if (!pathway) return;
+    const workspace = document.getElementById('pathway-workspace');
+    if (!workspace) return;
+    workspace.style.display = 'block';
+    workspace.innerHTML = `<div class="glass-panel" style="background:rgba(255,255,255,0.02);">${marked.parse(pathway.content)}</div>`;
+    workspace.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.viewQuiz = (idx) => {
+    const quiz = AppState.quizzes[idx];
+    if (!quiz) return;
+    const contentArea = document.getElementById('content-area');
+    let current = 0;
+    let score = 0;
+    let answered = false;
+    let fractalMode = false;
+    let mainQuizState = { current, score };
+
+    const render = () => {
+        const q = (fractalMode && quiz.fractalQuiz) ? quiz.fractalQuiz.questions[current] : quiz.questions[current];
+        const total = (fractalMode && quiz.fractalQuiz) ? quiz.fractalQuiz.questions.length : quiz.questions.length;
+        
+        contentArea.innerHTML = `
+        <div class="view-section active">
+        <div class="glass-panel" style="max-width:800px; margin:0 auto;">
+            ${fractalMode ? `<div style="background:rgba(239,68,68,0.1); padding:0.5rem 1rem; border-radius:1rem; color:var(--error); font-weight:700; font-size:0.8rem; margin-bottom:1rem; text-align:center; border:1px solid rgba(239,68,68,0.2)">DIAGNOSTIC LOOP: Mastering "${quiz.questions[mainQuizState.current].q.substring(0, 30)}..."</div>` : ''}
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+                <button class="btn btn-secondary btn-sm" onclick="window.navigate('quizzes')" style="border-radius:2rem;">← Exit</button>
+                <span style="color:var(--text-muted); font-size:0.9rem;">Question ${current + 1} of ${total}</span>
+                <span style="font-weight:700; color:var(--accent);">Score: ${score}/${total}</span>
+            </div>
+            <div style="height:4px; background:rgba(255,255,255,0.1); border-radius:2rem; margin-bottom:2rem; overflow:hidden;">
+                <div style="height:100%; width:${((current)/total)*100}%; background:linear-gradient(90deg, ${fractalMode ? '#ef4444' : 'var(--accent)'}, #8b5cf6); border-radius:2rem; transition:width 0.4s ease;"></div>
+            </div>
+            <h3 style="font-size:1.25rem; margin-bottom:2rem; line-height:1.6;">${q.q}</h3>
+            <div id="quiz-options" style="display:flex; flex-direction:column; gap:0.75rem;">
+                ${q.options.map((opt, i) => `
+                    <button class="quiz-option-btn" onclick="window.selectAnswer(${i})" data-idx="${i}"
+                        style="text-align:left; padding:1rem 1.5rem; border-radius:1rem; background:rgba(255,255,255,0.05); border:1px solid var(--border-color); color:var(--text-main); cursor:pointer; transition:all 0.2s; font-size:0.95rem; width:100%;">
+                        <span style="font-weight:700; color:var(--accent); margin-right:0.75rem;">${String.fromCharCode(65+i)}.</span>${opt}
+                    </button>
+                `).join('')}
+            </div>
+            <div id="why-trap-area" style="display:none; margin-top:2rem; padding:1.5rem; background:rgba(59,130,246,0.1); border-radius:1.5rem; border:1px solid var(--accent)">
+                <h4 style="color:var(--accent); margin-bottom:0.5rem">🧠 THE "WHY" TRAP</h4>
+                <p style="font-size:0.9rem; margin-bottom:1rem">Explain why you chose this answer. Prove you aren't guessing!</p>
+                <textarea id="why-trap-input" class="form-control" style="background:rgba(0,0,0,0.4); margin-bottom:1rem" placeholder="Explain your reasoning..."></textarea>
+                <button class="btn btn-primary btn-sm" id="btn-submit-why">Verify My Reasoning</button>
+            </div>
+            <div id="quiz-feedback" style="display:none; margin-top:1.5rem; padding:1.25rem; border-radius:1rem;"></div>
+        </div>
+        </div>`;
+
+        window.selectAnswer = async (chosenIdx) => {
+            if (answered) return;
+            
+            // Randomly trigger "Why Trap" (20% chance or if it's the first question to set the tone)
+            const triggerWhyTrap = !fractalMode && (Math.random() < 0.3 || current === 0);
+            
+            if (triggerWhyTrap) {
+                answered = true;
+                const trapArea = document.getElementById('why-trap-area');
+                trapArea.style.display = 'block';
+                document.querySelectorAll('.quiz-option-btn').forEach(b => b.style.opacity = '0.5');
+                document.querySelectorAll('.quiz-option-btn')[chosenIdx].style.opacity = '1';
+                document.querySelectorAll('.quiz-option-btn')[chosenIdx].style.borderColor = 'var(--accent)';
+                
+                document.getElementById('btn-submit-why').onclick = async () => {
+                    const reasoning = document.getElementById('why-trap-input').value;
+                    if (!reasoning) return showToast("Please explain your reasoning!", "error");
+                    
+                    const statusEl = document.getElementById('quiz-feedback');
+                    statusEl.style.display = 'block';
+                    statusEl.innerHTML = '<p style="color:var(--accent)">Gemini is analyzing your logic...</p>';
+                    
+                    try {
+                        const checkRes = await callGemini([
+                            { text: `QUESTION: ${q.q}\nUSER SELECTED: ${q.options[chosenIdx]}\nUSER REASONING: ${reasoning}\n\nCORRECT ANSWER INDEX: ${q.correct}\nCORRECT ANSWER TEXT: ${q.options[q.correct]}\n\nIs the user's reasoning correct and sufficient? Return JSON: {"valid": true/false, "feedback": "brief feedback"}` }
+                        ], "You are a Socratic examiner. Be strict. If the reasoning is vague or wrong, valid is false.", null, "application/json");
+                        
+                        const checkData = parseJsonSafe(checkRes);
+                        if (!checkData.valid) {
+                            statusEl.style.background = 'rgba(239,68,68,0.1)';
+                            statusEl.style.borderLeft = '4px solid #ef4444';
+                            statusEl.innerHTML = `<strong>Reasoning Rejected:</strong> ${checkData.feedback}<br>Even if you picked the right choice, you must understand WHY.`;
+                            // Force wrong answer if reasoning is bad
+                            processFinalAnswer(99); // Invalid index
+                        } else {
+                            statusEl.style.background = 'rgba(16,185,129,0.1)';
+                            statusEl.style.borderLeft = '4px solid #10b981';
+                            statusEl.innerHTML = `<strong>Reasoning Validated:</strong> ${checkData.feedback}`;
+                            processFinalAnswer(chosenIdx);
+                        }
+                    } catch (e) { statusEl.innerHTML = e.message; }
+                };
+            } else {
+                processFinalAnswer(chosenIdx);
+            }
+        };
+
+        const processFinalAnswer = async (chosenIdx) => {
+            answered = true;
+            const correct = q.correct;
+            const btns = document.querySelectorAll('.quiz-option-btn');
+            btns.forEach((btn, i) => {
+                btn.style.pointerEvents = 'none';
+                if (i === correct) { btn.style.background = 'rgba(16,185,129,0.2)'; btn.style.borderColor = '#10b981'; }
+                if (i === chosenIdx && chosenIdx !== correct) { btn.style.background = 'rgba(239,68,68,0.2)'; btn.style.borderColor = '#ef4444'; }
+            });
+
+            const isCorrect = chosenIdx === correct;
+            if (isCorrect) { score++; }
+            else {
+                // Track the wrong answer
+                AppState.wrongAnswers = AppState.wrongAnswers || [];
+                AppState.wrongAnswers.push({
+                    question: q.q,
+                    yourAnswer: chosenIdx === 99 ? "Invalid Reasoning" : q.options[chosenIdx],
+                    correctAnswer: q.options[correct],
+                    date: new Date().toISOString()
+                });
+                saveState('wrongAnswers', AppState.wrongAnswers);
+                
+                // Trigger Fractal Error Loop if not already in one
+                if (!fractalMode) {
+                    const feedback = document.getElementById('quiz-feedback');
+                    feedback.style.display = 'block';
+                    feedback.style.background = 'rgba(239,68,68,0.1)';
+                    feedback.style.borderLeft = '4px solid #ef4444';
+                    feedback.innerHTML = `❌ Incorrect. <strong>FRACTAL ERROR LOOP:</strong> Generating a targeted mini-quiz on this concept...`;
+                    
+                    try {
+                        // Use generic context if no active sources (fractal can work without sources)
+                        const fractalParts = AppState.activeSourceIndices.length > 0 ? getActiveContextParts() : [];
+                        fractalParts.push({ text: `The user failed this question: "${q.q}". The correct answer was "${q.options[correct]}". Generate exactly 3 follow-up questions to test understanding of this specific concept. Return ONLY JSON (no markdown): {"questions":[{"q":"string","options":["A","B","C","D"],"correct":0}]}` });
+                        const fractalRes = await callGemini(fractalParts, "You are a diagnostic educator. Return ONLY raw valid JSON.", null, "application/json");
+                        quiz.fractalQuiz = parseJsonSafe(fractalRes);
+                        
+                        setTimeout(() => {
+                            mainQuizState = { current, score };
+                            fractalMode = true;
+                            current = 0;
+                            score = 0;
+                            answered = false;
+                            render();
+                        }, 2500);
+                        return; // Stop here, render will be called in timeout
+                    } catch (e) {
+                        // If fractal generation fails, just continue normally
+                        showToast("Fractal loop unavailable, continuing quiz.", "error");
+                    }
+                }
+            }
+
+            const feedback = document.getElementById('quiz-feedback');
+            feedback.style.display = 'block';
+            feedback.style.background = isCorrect ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)';
+            feedback.style.borderLeft = `4px solid ${isCorrect ? '#10b981' : '#ef4444'}`;
+            feedback.innerHTML = isCorrect ? '✅ Correct!' : `❌ Incorrect. The correct answer was: <strong>${q.options[correct]}</strong>`;
+
+            setTimeout(() => {
+                answered = false;
+                if (current < total - 1) {
+                    current++;
+                    render();
+                } else {
+                    if (fractalMode) {
+                        // Fractal complete, return to main quiz
+                        showToast("Sub-module mastered! Returning to main quiz.", "success");
+                        fractalMode = false;
+                        current = mainQuizState.current + 1;
+                        score = mainQuizState.score;
+                        if (current >= quiz.questions.length) {
+                             finalizeQuiz();
+                        } else {
+                             render();
+                        }
+                    } else {
+                        finalizeQuiz();
+                    }
+                }
+            }, 1500);
+        };
+        
+        const finalizeQuiz = () => {
+            const finalScore = fractalMode ? mainQuizState.score : score;
+            const pct = quiz.questions.length > 0 ? Math.round((finalScore / quiz.questions.length) * 100) : 0;
+            quiz.score = pct;
+            saveState('quizzes', AppState.quizzes);
+            contentArea.innerHTML = `
+            <div class="view-section active">
+            <div class="glass-panel" style="max-width:600px; margin:0 auto; text-align:center;">
+                <div style="font-size:5rem; margin-bottom:1rem;">${pct >= 70 ? '🎉' : pct >= 40 ? '📚' : '💪'}</div>
+                <h2 style="font-size:2rem; margin-bottom:0.5rem;">Quiz Complete!</h2>
+                <p style="color:var(--text-muted); margin-bottom:2rem;">${quiz.title}</p>
+                <div style="font-size:4rem; font-weight:900; color:${pct>=70?'var(--success)':pct>=40?'#f59e0b':'#ef4444'}; margin-bottom:2rem;">${pct}%</div>
+                <p style="color:var(--text-muted);">${fractalMode ? mainQuizState.score : score} out of ${quiz.questions.length} correct</p>
+                <div style="display:flex; gap:1rem; justify-content:center; margin-top:2rem;">
+                    <button class="btn btn-primary" onclick="window.navigate('quizzes')">Back to Quizzes</button>
+                    <button class="btn btn-secondary" onclick="window.navigate('review-mistakes')">Review Mistakes</button>
+                </div>
+            </div>
+            </div>`;
+        };
+    };
+    render();
+};
+
+
 
 // ==========================================
 // INITIALIZATION
