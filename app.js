@@ -478,25 +478,13 @@ const Views = {
     settings: () => `
         <div class="glass-panel" style="max-width: 600px;">
             <h2 style="font-size: 2rem; margin-bottom: 2rem">System Configuration</h2>
-            <div class="form-group"><label>Gemini API Key</label><input type="password" id="input-api-key" class="form-control" value="${AppState.apiKey}" placeholder="Paste your API key from Google AI Studio"></div>
-            <div class="form-group" style="margin-top: 1.5rem"><label>AI Model</label>
-                <select id="input-model" class="form-control">
-                    <option value="gemini-2.5-flash" ${(AppState.settings.model||'gemini-2.5-flash')==='gemini-2.5-flash'?'selected':''}>Gemini 2.5 Flash (Latest, may hit quota faster)</option>
-                    <option value="gemini-1.5-flash" ${AppState.settings.model==='gemini-1.5-flash'?'selected':''}>Gemini 1.5 Flash (Stable, higher quota)</option>
-                    <option value="gemini-1.5-flash-latest" ${AppState.settings.model==='gemini-1.5-flash-latest'?'selected':''}>Gemini 1.5 Flash Latest</option>
-                    <option value="gemini-1.5-pro" ${AppState.settings.model==='gemini-1.5-pro'?'selected':''}>Gemini 1.5 Pro (Most capable, lowest quota)</option>
-                </select>
-                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem;">💡 If you hit quota limits, the app will auto-fallback to Gemini 1.5 Flash. You can also manually switch here.</p>
-            </div>
+            <div class="form-group"><label>Gemini API Key</label><input type="password" id="input-api-key" class="form-control" value="${AppState.apiKey}"></div>
             <div class="form-group" style="margin-top: 1.5rem"><label>Study Mode</label>
                 <select id="input-study-mode" class="form-control">
                     <option value="casual" ${AppState.settings.studyMode==='casual'?'selected':''}>Casual - Fun & Encouraging</option>
                     <option value="medium" ${AppState.settings.studyMode==='medium'?'selected':''}>Academic - Balanced</option>
                     <option value="exam" ${AppState.settings.studyMode==='exam'?'selected':''}>Exam - Rigorous & Challenging</option>
                 </select>
-            </div>
-            <div style="background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); border-radius: 0.75rem; padding: 1rem; margin-top: 1.5rem;">
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">🔑 Get a free API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--accent);">aistudio.google.com</a>. Free tier includes 15 RPM on Gemini 1.5 Flash.</p>
             </div>
             <button class="btn btn-primary" id="btn-save-settings" style="margin-top: 2.5rem; width:100%">Save Configuration</button>
         </div>`,
@@ -570,12 +558,8 @@ window.navigate = (route) => {
 const bindViewEvents = (route) => {
     if (route === 'settings') {
         document.getElementById('btn-save-settings').onclick = () => {
-            const apiKey = document.getElementById('input-api-key').value.trim();
-            const model = document.getElementById('input-model').value;
-            const studyMode = document.getElementById('input-study-mode').value;
-            saveState('apiKey', apiKey);
-            saveState('settings', { ...AppState.settings, model, studyMode });
-            showToast('Settings saved! Model: ' + model);
+            saveState('apiKey', document.getElementById('input-api-key').value);
+            showToast('Settings saved!');
         };
     }
     
@@ -787,25 +771,6 @@ window.setComplexity = (el, id) => {
 // INITIALIZATION
 // ==========================================
 
-window.handleAuthClick = () => {
-    if (!auth || !firebaseConfig.apiKey || firebaseConfig.apiKey === "YOUR_API_KEY") {
-        return showToast("Firebase is not configured. Please add your config in app.js", "error");
-    }
-    
-    if (auth.currentUser) {
-        if (confirm("Sign out of your account?")) {
-            signOut(auth).then(() => showToast("Signed out successfully", "success"));
-        }
-    } else {
-        const provider = new GoogleAuthProvider();
-        signInWithPopup(auth, provider).then((result) => {
-            showToast("Welcome, " + result.user.displayName + "!", "success");
-        }).catch((error) => {
-            showToast("Sign in failed: " + error.message, "error");
-        });
-    }
-};
-
 document.addEventListener('DOMContentLoaded', () => {
     loadLocalData();
     updateApiStatus();
@@ -816,27 +781,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (route) window.navigate(route);
         };
     });
-    
-    if (auth) {
-        onAuthStateChanged(auth, (user) => {
-            const authEmail = document.getElementById('auth-email');
-            const userAvatar = document.getElementById('user-avatar');
-            if (user) {
-                if (authEmail) {
-                    authEmail.textContent = user.displayName || user.email;
-                    authEmail.style.display = 'block';
-                }
-                if (userAvatar) {
-                    userAvatar.innerHTML = user.photoURL 
-                        ? `<img src="${user.photoURL}" style="width:100%; height:100%; object-fit:cover;" referrerpolicy="no-referrer">` 
-                        : `<ion-icon name="person"></ion-icon>`;
-                }
-            } else {
-                if (authEmail) authEmail.style.display = 'none';
-                if (userAvatar) userAvatar.innerHTML = `<ion-icon name="person-outline"></ion-icon>`;
-            }
-        });
-    }
     
     window.navigate('dashboard');
 });
