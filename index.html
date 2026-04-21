@@ -14,7 +14,7 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar Navigation -->
+        <!-- Sidebar Navigation (thin icon-only) -->
         <nav class="sidebar thin-sidebar">
             <div class="logo">
                 <ion-icon name="sparkles"></ion-icon>
@@ -80,8 +80,9 @@
                 <h1 id="page-title">Dashboard</h1>
                 <div class="flex-spacer"></div>
                 <div id="api-key-status" class="status-badge missing">API Key Missing</div>
-                <div class="user-profile">
-                    <div class="avatar">
+                <div class="user-profile" id="auth-button" onclick="window.handleAuthClick()" style="cursor:pointer; display:flex; align-items:center; gap: 0.5rem;" title="Sign In with Google">
+                    <span id="auth-email" style="font-size: 0.85rem; font-weight: 500; display: none;"></span>
+                    <div class="avatar" id="user-avatar" style="overflow:hidden; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.1);">
                         <ion-icon name="person-outline"></ion-icon>
                     </div>
                 </div>
@@ -98,10 +99,10 @@
     
     <!-- Modal Container -->
     <div id="modal-container" class="modal-container hidden">
-        <div class="modal-backdrop"></div>
+        <div class="modal-backdrop" onclick="document.getElementById('modal-container').classList.add('hidden')"></div>
         <div class="modal-content" id="modal-body"></div>
     </div>
 
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
