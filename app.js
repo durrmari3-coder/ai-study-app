@@ -717,13 +717,13 @@ const Views = {
             <div id="blur-status" style="margin-top:1.5rem; text-align:center; font-weight:600; color:var(--accent)"></div>
             
             <div id="blur-workspace" style="margin-top:2rem; display:none;">
-                <div class="glass-panel" id="blur-text-panel" style="background:rgba(255,255,255,0.02); padding:2rem; line-height:2.2; font-size:1.05rem;"></div>
+                <div class="glass-panel" id="blur-text-panel" style="background:rgba(255,255,255,0.02); padding:2rem; line-height:2.2; font-size:1.05rem; margin-bottom: 2rem;"></div>
                 
-                <div id="blurt-input-area" class="blurt-input-container" style="display:none">
-                    <h3 style="margin-bottom: 0.5rem">Your Blurt</h3>
-                    <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Type everything you remember about the topic below. Gemini will validate your semantic understanding.</p>
+                <div id="blurt-input-area" class="blurt-input-container">
+                    <h3 id="blurt-title" style="margin-bottom: 0.5rem">Recall Attempt</h3>
+                    <p id="blurt-instruction" style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Type what you remember about the source below.</p>
                     <textarea id="blurt-textarea" class="blurt-textarea" placeholder="Start typing what you remember..."></textarea>
-                    <button class="btn btn-primary" id="btn-validate-blurt"><ion-icon name="checkmark-done-outline"></ion-icon> Validate My Recall</button>
+                    <button class="btn btn-primary" id="btn-validate-blurt" style="width:100%; margin-top: 1rem;"><ion-icon name="checkmark-done-outline"></ion-icon> Validate My Recall</button>
                 </div>
 
                 <div id="redaction-controls" style="display:none; margin-top: 1.5rem; text-align:center;">
@@ -1043,8 +1043,8 @@ const bindViewEvents = (route) => {
 
             workspace.style.display = 'block';
             textPanel.innerHTML = '';
-            blurtArea.style.display = 'none';
             redactionControls.style.display = 'none';
+            blurtArea.style.display = 'block';
             statusEl.textContent = "Synthesizing study session...";
             
             const focus = document.getElementById('input-blur-focus').value;
@@ -1180,9 +1180,72 @@ const bindViewEvents = (route) => {
                     };
                     slider.oninput = updateBlur;
                     updateBlur();
+
+                    // Ensure validation works for all modes
+                    document.getElementById('btn-validate-blurt').onclick = async () => {
+                        const userBlurt = document.getElementById('blurt-textarea').value;
+                        if (!userBlurt) return showToast("Type your recall attempt first!", "error");
+                        statusEl.textContent = "Gemini is validating your recall against the original source...";
+                        
+                        try {
+                            const valRes = await callGemini([
+                                { text: `SOURCE TEXT:\n${res.replace(/\[CON\]|\[\/CON\]|\[KEY\]|\[\/KEY\]/g, '')}\n\nUSER RECALL:\n${userBlurt}\n\nCompare the user's recall with the source. Identify which key concepts they GOT RIGHT and which they MISSED or MISUNDERSTOOD. Return a JSON object: {"score": 0-100, "feedback": "overall feedback", "gotRight": ["concept1", "concept2"], "missed": ["concept3"]}` }
+                            ], "Socratic validator.", null, "application/json");
+                            
+                            const valData = parseJsonSafe(valRes);
+                            textPanel.style.filter = 'none';
+                            textPanel.style.opacity = '1';
+                            
+                            // Highlight the source text with semantic heatmap
+                            let highlightedText = res.replace(/\[CON\]|\[\/CON\]/g, '');
+                            valData.gotRight.forEach(concept => {
+                                const reg = new RegExp(`(${concept})`, 'gi');
+                                highlightedText = highlightedText.replace(reg, `<span class="blur-term correct revealed">$1</span>`);
+                            });
+                            valData.missed.forEach(concept => {
+                                const reg = new RegExp(`(${concept})`, 'gi');
+                                highlightedText = highlightedText.replace(reg, `<span class="blur-term missed revealed">$1</span>`);
+                            });
+                            highlightedText = highlightedText.replace(/\[KEY\](.*?)\[\/KEY\]/g, '<span class="blur-term revealed">$1</span>');
+                            
+                            textPanel.innerHTML = `
+                                <div class="glass-panel" style="margin-bottom: 1.5rem; border-color: var(--accent);">
+                                    <h3 style="color:var(--accent)">Recall Score: ${valData.score}%</h3>
+                                    <p>${valData.feedback}</p>
+                                </div>
+                                <div>${highlightedText}</div>
+                            `;
+                            statusEl.textContent = "";
+                        } catch (e) { statusEl.textContent = e.message; }
+                    };
                 }
+                
+                // Set instructions based on mode
+                const blurtTitle = document.getElementById('blurt-title');
+                const blurtInstr = document.getElementById('blurt-instruction');
+                if (mode === 'blur') {
+                    blurtTitle.textContent = "Fill in the Blanks & Recall";
+                    blurtInstr.textContent = "Identify the blurred terms and summarize the content above.";
+                } else if (mode === 'redaction') {
+                    blurtTitle.textContent = "Core Meaning Synthesis";
+                    blurtInstr.textContent = "Summarize the core meaning of the text after you've removed the fluff.";
+                } else {
+                    blurtTitle.textContent = "Full Recall (Blurt)";
+                    blurtInstr.textContent = "Type everything you remember about the source. Gemini will validate your understanding.";
+                }
+
                 statusEl.textContent = "";
-            } catch (e) { statusEl.textContent = e.message; }
+                workspace.scrollIntoView({ behavior: 'smooth' });
+            } catch (e) { 
+                statusEl.textContent = e.message;
+                // If API key is missing, show the workspace anyway for UI preview if possible
+                if (e.message.includes("API Key")) {
+                    workspace.style.display = 'block';
+                    blurtArea.style.display = 'block';
+                    textPanel.innerHTML = '<p style="color:var(--warning); text-align:center;">Study session initialized in <b>offline mode</b>. Enter an API key in Settings to enable AI validation.</p>';
+                    workspace.scrollIntoView({ behavior: 'smooth' });
+                }
+            }
         };
     }
 
