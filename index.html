@@ -15,47 +15,64 @@
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation (thin icon-only) -->
-        <nav class="sidebar thin-sidebar">
+        <nav class="sidebar">
             <div class="logo">
                 <ion-icon name="sparkles"></ion-icon>
+                <span>Lumina</span>
             </div>
             
-            <ul class="nav-links thin" id="nav-menu">
-                <li class="active" data-route="dashboard" title="Dashboard">
+            <ul class="nav-links" id="nav-menu">
+                <li class="active" data-route="dashboard">
                     <ion-icon name="grid-outline"></ion-icon>
+                    <span>Dashboard</span>
                 </li>
-                <li data-route="notebook" title="Open Notebook">
+                <li data-route="notebook">
                     <ion-icon name="chatbubbles-outline"></ion-icon>
+                    <span>Notebook</span>
                 </li>
-                <li data-route="overviews" title="Media Overviews">
+                <li data-route="overviews">
                     <ion-icon name="play-circle-outline"></ion-icon>
+                    <span>Overviews</span>
                 </li>
-                <li data-route="studio" title="Studio Generator">
+                <li data-route="studio">
                     <ion-icon name="color-palette-outline"></ion-icon>
+                    <span>Creative Studio</span>
                 </li>
-                <li data-route="pathways" title="Mastery Pathways">
+                <li data-route="pathways">
                     <ion-icon name="map-outline"></ion-icon>
+                    <span>Pathways</span>
                 </li>
-                <li data-route="flashcards" title="Flashcards">
+                <li data-route="flashcards">
                     <ion-icon name="albums-outline"></ion-icon>
+                    <span>Flashcards</span>
                 </li>
-                <li data-route="quizzes" title="Quizzes">
+                <li data-route="quizzes">
                     <ion-icon name="help-circle-outline"></ion-icon>
+                    <span>Quizzes</span>
                 </li>
-                <li data-route="study-rooms" title="Study Rooms">
+                <li data-route="study-rooms">
                     <ion-icon name="people-outline"></ion-icon>
+                    <span>Study Rooms</span>
                 </li>
-                <li data-route="blur-study" title="Blur Study">
+                <li data-route="blur-study">
                     <ion-icon name="eye-off-outline"></ion-icon>
+                    <span>Blur Study</span>
                 </li>
-                <li data-route="review-mistakes" title="Review Mistakes">
+                <li data-route="podcast">
+                    <ion-icon name="radio-outline"></ion-icon>
+                    <span>Podcast</span>
+                </li>
+                <li data-route="review-mistakes">
                     <ion-icon name="alert-circle-outline"></ion-icon>
+                    <span>Mistakes</span>
                 </li>
-                <li data-route="mastery" title="Mastery Analytics">
+                <li data-route="mastery">
                     <ion-icon name="bar-chart-outline"></ion-icon>
+                    <span>Analytics</span>
                 </li>
-                <li data-route="settings" title="Settings" style="margin-top: auto">
+                <li data-route="settings" style="margin-top: auto">
                     <ion-icon name="settings-outline"></ion-icon>
+                    <span>Settings</span>
                 </li>
             </ul>
         </nav>
@@ -80,9 +97,8 @@
                 <h1 id="page-title">Dashboard</h1>
                 <div class="flex-spacer"></div>
                 <div id="api-key-status" class="status-badge missing">API Key Missing</div>
-                <div class="user-profile" id="auth-button" onclick="window.handleAuthClick()" style="cursor:pointer; display:flex; align-items:center; gap: 0.5rem;" title="Sign In with Google">
-                    <span id="auth-email" style="font-size: 0.85rem; font-weight: 500; display: none;"></span>
-                    <div class="avatar" id="user-avatar" style="overflow:hidden; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.1);">
+                <div class="user-profile" onclick="if(confirm('Clear all data and reset?')) window.signOutUser()" style="cursor:pointer" title="Reset App">
+                    <div class="avatar" id="user-avatar">
                         <ion-icon name="person-outline"></ion-icon>
                     </div>
                 </div>
