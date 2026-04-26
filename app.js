@@ -1,5 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, query, where, getDocs, arrayUnion, serverTimestamp, addDoc, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
 
 // ==========================================
 // FIREBASE CONFIGURATION
@@ -15,14 +17,16 @@ const firebaseConfig = {
     measurementId: "G-07VKYN007T"
 };
 
-let app, auth;
+let app, auth, db;
 try {
     // We wrap in a try-catch so the app doesn't break if the config is invalid/placeholder
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
+    db = getFirestore(app);
 } catch (e) {
     console.warn("Firebase not configured properly:", e);
 }
+
 
 // ==========================================
 // STATE PERSISTENCE (LocalStorage)
@@ -35,13 +39,24 @@ const FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-fla
 const AppState = {
     apiKey: '',
     settings: { studyMode: "medium", model: "gemini-2.5-flash" },
-    rooms: [],
+    rooms: [], // Local rooms (folders)
     currentRoomIndex: -1,
     chatHistory: [], documents: [], quizzes: [], flashcards: [], pathways: [],
     wrongAnswers: [], overviewChat: [], presentations: [], infographics: [], overviews: [],
     activeSourceIndices: [], selectedQuizMode: 'multiple-choice', selectedComplexity: 'medium',
-    activeDashboardTab: 'rooms', masteryTimeframe: 'week'
+    sourceLibrary: [], // For the Search Sources feature
+    activeDashboardTab: 'realtime', // 'realtime' or 'rooms'
+    searchConfig: {
+        apiKey: '',
+        cx: ''
+    },
+    masteryTimeframe: 'week',
+    // Real-time Study Rooms State
+    realtimeRoom: null, 
+    user: null, // Logged in user info
+    isHost: false
 };
+
 
 let currentRoute = 'dashboard';
 
@@ -78,6 +93,20 @@ const saveState = (key, value) => {
  */
 const loadLocalData = () => {
     try {
+        if (auth) {
+            onAuthStateChanged(auth, (user) => {
+                AppState.user = user;
+                if (user) {
+                    const avatar = document.getElementById('user-avatar');
+                    if (avatar) avatar.src = user.photoURL || 'https://ui-avatars.com/api/?name=' + user.displayName;
+                    AppState.apiKey = localStorage.getItem('gemini_api_key') || '';
+                } else {
+                    const avatar = document.getElementById('user-avatar');
+                    if (avatar) avatar.src = 'https://ui-avatars.com/api/?name=Guest';
+                }
+            });
+        }
+        
         AppState.apiKey = JSON.parse(localStorage.getItem('lumina_apiKey')) || '';
         AppState.settings = JSON.parse(localStorage.getItem('lumina_settings')) || AppState.settings;
         AppState.currentRoomIndex = JSON.parse(localStorage.getItem('lumina_currentRoomIndex')) ?? -1;
@@ -183,10 +212,40 @@ const callGemini = async (prompt, systemInstruction = '', history = [], response
  * Safely parse JSON, stripping markdown code fences if present.
  */
 const parseJsonSafe = (text) => {
-    // Strip ```json ... ``` or ``` ... ``` wrappers that models sometimes add
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    return JSON.parse(cleaned);
+    try {
+        // Find the first '{' or '[' and the last '}' or ']'
+        const startBrace = text.indexOf('{');
+        const startBracket = text.indexOf('[');
+        let start = -1;
+        if (startBrace !== -1 && startBracket !== -1) start = Math.min(startBrace, startBracket);
+        else start = startBrace !== -1 ? startBrace : startBracket;
+        
+        const endBrace = text.lastIndexOf('}');
+        const endBracket = text.lastIndexOf(']');
+        let end = -1;
+        if (endBrace !== -1 && endBracket !== -1) end = Math.max(endBrace, endBracket);
+        else end = endBrace !== -1 ? endBrace : endBracket;
+
+        if (start === -1 || end === -1 || end < start) {
+            // Fallback to original cleaning if no clear boundaries
+            const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+            return JSON.parse(cleaned);
+        }
+
+        const jsonStr = text.substring(start, end + 1);
+        return JSON.parse(jsonStr);
+    } catch (error) {
+        console.error("JSON Parse Error:", error, "Raw text:", text);
+        // Last ditch effort: strip common markdown noise
+        try {
+            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            return JSON.parse(cleaned);
+        } catch (e) {
+            throw new Error("The AI returned an invalid format. Please try again.");
+        }
+    }
 };
+
 
 // ==========================================
 // UI UTILITIES
@@ -348,27 +407,41 @@ window.processIngest = async () => {
             const rawUrl = document.getElementById('ingest-url').value.trim();
             if (!rawUrl) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("URL required", "error"); }
             actualType = 'url';
-            // Try to fetch via CORS proxy first, fall back to storing URL as-is
-            try {
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rawUrl)}`;
-                const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    // Strip HTML tags to get plain text
-                    const tmp = document.createElement('div');
-                    tmp.innerHTML = data.contents || '';
-                    content = (tmp.textContent || tmp.innerText || '').substring(0, 80000); // cap at 80k chars
-                    actualType = 'text'; // treat fetched content as text
-                    showToast("URL content fetched successfully!", "success");
-                } else {
-                    content = rawUrl;
-                    actualType = 'url';
-                    showToast("Stored URL (could not fetch content — CORS blocked). AI will use the URL as context.", "warning");
+            
+            const proxies = [
+                (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+                (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+            ];
+
+            let success = false;
+            for (const getProxyUrl of proxies) {
+                try {
+                    const proxyUrl = getProxyUrl(rawUrl);
+                    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const htmlContent = data.contents || (typeof data === 'string' ? data : '');
+                        if (htmlContent) {
+                            const tmp = document.createElement('div');
+                            tmp.innerHTML = htmlContent;
+                            // Remove scripts, styles, and other noise
+                            tmp.querySelectorAll('script, style, nav, footer, header').forEach(el => el.remove());
+                            content = (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 100000); 
+                            actualType = 'text';
+                            success = true;
+                            showToast("URL content fetched and cleaned!", "success");
+                            break;
+                        }
+                    }
+                } catch (err) {
+                    console.warn(`Proxy failed:`, err);
                 }
-            } catch (fetchErr) {
+            }
+
+            if (!success) {
                 content = rawUrl;
                 actualType = 'url';
-                showToast("Stored URL as reference (fetch timed out).", "warning");
+                showToast("Stored URL as reference (could not fetch content).", "warning");
             }
         } else if (type === 'file') {
             const fileInput = document.getElementById('ingest-file');
@@ -379,10 +452,9 @@ window.processIngest = async () => {
             const supported = file.type.startsWith('image/') || file.type === 'application/pdf' ||
                               file.type === 'video/mp4' || file.type === 'text/plain' ||
                               file.type === 'text/csv' || file.type.includes('document');
-            if (!supported) return showToast(`Unsupported file type: ${file.type}. Use images, PDF, MP4, or text files.`, "error");
+            if (!supported) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast(`Unsupported file type: ${file.type}`, "error"); }
             
             if (file.type === 'text/plain' || file.type === 'text/csv') {
-                // Read text files as plain text
                 content = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = () => resolve(reader.result);
@@ -394,14 +466,10 @@ window.processIngest = async () => {
             } else {
                 actualType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'pdf');
                 mimeType = file.type;
-                if (file.size > 4 * 1024 * 1024) isLargeMedia = true;
+                if (file.size > 2 * 1024 * 1024) isLargeMedia = true; // Lower threshold for better stability
                 content = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
-                    reader.onload = () => {
-                        // result is data:mime/type;base64,XXXX — we need only the base64 part
-                        const b64 = reader.result.split(',')[1];
-                        resolve(b64 || '');
-                    };
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
                     reader.onerror = reject;
                     reader.readAsDataURL(file);
                 });
@@ -411,26 +479,394 @@ window.processIngest = async () => {
         const newDoc = {
             title,
             type: actualType,
-            items: [{ title: title, type: actualType, mimeType, content, isLargeMedia }]
+            items: [{ title: title, type: actualType, mimeType, content, isLargeMedia, date: new Date().toISOString() }]
         };
         AppState.documents.push(newDoc);
         
-        // Strip large binary content before saving to localStorage to prevent quota crash
-        const safeDocs = AppState.documents.map(doc => ({
-            ...doc,
-            items: doc.items.map(it => it.isLargeMedia ? { ...it, content: '[LARGE_MEDIA_SESSION_ONLY]' } : it)
-        }));
-        saveState('documents', safeDocs);
+        // Better persistence logic: try to save, if it fails due to QuotaExceeded, strip largest items
+        try {
+            saveState('documents', AppState.documents);
+        } catch (quotaErr) {
+            console.warn("LocalStorage Quota Exceeded, stripping large media...");
+            const safeDocs = AppState.documents.map(doc => ({
+                ...doc,
+                items: doc.items.map(it => it.isLargeMedia ? { ...it, content: '[LARGE_MEDIA_SESSION_ONLY]' } : it)
+            }));
+            saveState('documents', safeDocs);
+            showToast("Storage full! Large files kept in session only.", "warning");
+        }
         
         document.getElementById('modal-container').classList.add('hidden');
         window.renderSourcesSidebar();
-        showToast(isLargeMedia ? "Large file added! Session only (won't persist after refresh)." : "Source added successfully!", isLargeMedia ? "warning" : "success");
+        if(!isLargeMedia) showToast("Source added successfully!", "success");
     } catch (e) {
         console.error('Ingest error:', e);
-        showToast(`Error: ${e.message || 'Could not process source'}`, "error");
+        showToast(`Error: ${e.message}`, "error");
         if (btn) { btn.disabled = false; btn.textContent = 'Add Source'; }
     }
 };
+
+window.setDashboardTab = (tab) => {
+    AppState.activeDashboardTab = tab;
+    window.navigate('study-rooms');
+    if (tab === 'realtime') window.fetchPublicRooms();
+};
+
+window.fetchPublicRooms = async () => {
+    const pList = document.getElementById('public-rooms-list');
+    if (!pList) return;
+    try {
+        const q = query(collection(db, "rooms"), where("privacy", "==", "public"), limit(10));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+            pList.innerHTML = '<p style="color:var(--text-muted); text-align:center; grid-column: 1/-1; padding:2rem;">No public rooms active. Be the first to host one!</p>';
+            return;
+        }
+        pList.innerHTML = snap.docs.map(doc => {
+            const r = doc.data();
+            return `
+            <div class="glass-panel" style="background:rgba(255,255,255,0.02); padding:1.25rem; display:flex; flex-direction:column; gap:0.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h4 style="margin:0">${r.name}</h4>
+                    <span style="font-size:0.6rem; background:rgba(16,185,129,0.1); color:var(--success); padding:0.2rem 0.5rem; border-radius:1rem;">PUBLIC</span>
+                </div>
+                <p style="font-size:0.75rem; color:var(--text-muted);">Host: ${r.hostName}</p>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem;">
+                    <span style="font-size:0.75rem; color:var(--accent); font-weight:700;">${Object.keys(r.participants).length} Members</span>
+                    <button class="btn btn-secondary btn-sm" onclick="window.joinRealtimeRoom('${r.code}')">Join Room</button>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        console.error("Fetch rooms error:", e);
+    }
+};
+
+
+window.showCreateRealtimeModal = () => {
+    if (!auth.currentUser) return showToast("Please sign in with Google to host rooms", "error");
+    window.showModal('Create Study Room', `
+        <div class="form-group">
+            <label>Room Name</label>
+            <input type="text" id="rt-room-name" class="form-control" placeholder="E.g. Biology 101 Final Prep">
+        </div>
+        <div class="form-group">
+            <label>Privacy</label>
+            <select id="rt-room-privacy" class="form-control">
+                <option value="public">Public (Discoverable)</option>
+                <option value="private">Private (Invite only)</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" onclick="window.createRealtimeRoom()" style="width:100%">Initialize Room</button>
+    `);
+};
+
+window.createRealtimeRoom = async () => {
+    const name = document.getElementById('rt-room-name').value;
+    const privacy = document.getElementById('rt-room-privacy').value;
+    if (!name) return showToast("Room name is required", "error");
+
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const roomData = {
+        name,
+        privacy,
+        code,
+        hostId: auth.currentUser.uid,
+        hostName: auth.currentUser.displayName || "Host",
+        createdAt: serverTimestamp(),
+        active: true,
+        timer: { active: false, startTime: null, duration: 25 },
+        currentContent: null,
+        participants: {
+            [auth.currentUser.uid]: {
+                name: auth.currentUser.displayName || "Host",
+                photo: auth.currentUser.photoURL,
+                status: 'focused',
+                lastSeen: serverTimestamp()
+            }
+        }
+    };
+
+    try {
+        await setDoc(doc(db, "rooms", code), roomData);
+        AppState.isHost = true;
+        window.joinRealtimeRoom(code);
+        document.getElementById('modal-container').classList.add('hidden');
+    } catch (e) {
+        showToast("Error creating room: " + e.message, "error");
+    }
+};
+
+window.joinRealtimeRoom = async (providedCode) => {
+    const code = (providedCode || document.getElementById('join-room-code').value || "").toUpperCase();
+    if (!code) return showToast("Room code required", "error");
+    if (!auth.currentUser) return showToast("Please sign in first", "error");
+
+    try {
+        const roomRef = doc(db, "rooms", code);
+        const snap = await getDoc(roomRef);
+        if (!snap.exists()) return showToast("Room not found", "error");
+
+        // Join as participant
+        await updateDoc(roomRef, {
+            [`participants.${auth.currentUser.uid}`]: {
+                name: auth.currentUser.displayName || "Learner",
+                photo: auth.currentUser.photoURL,
+                status: 'focused',
+                lastSeen: serverTimestamp()
+            }
+        });
+
+        AppState.realtimeRoom = { id: code, ...snap.data() };
+        AppState.isHost = AppState.realtimeRoom.hostId === auth.currentUser.uid;
+        window.navigate('room-session');
+        window.initRoomSync(code);
+    } catch (e) {
+        showToast("Error joining: " + e.message, "error");
+    }
+};
+
+let roomUnsubscribe = null;
+window.initRoomSync = (code) => {
+    if (roomUnsubscribe) roomUnsubscribe();
+    roomUnsubscribe = onSnapshot(doc(db, "rooms", code), (snap) => {
+        if (!snap.exists()) {
+            showToast("Room closed by host", "warning");
+            window.leaveRealtimeRoom();
+            return;
+        }
+        const data = snap.data();
+        AppState.realtimeRoom = { id: code, ...data };
+        window.renderRoomUI();
+    });
+
+    // Sub for messages
+    const q = query(collection(db, `rooms/${code}/messages`), orderBy("createdAt", "desc"), limit(50));
+    onSnapshot(q, (snap) => {
+        const messages = [];
+        snap.forEach(doc => messages.push(doc.data()));
+        window.renderRoomMessages(messages.reverse());
+    });
+
+    // Sub for reactions (only new ones)
+    const rq = query(collection(db, `rooms/${code}/reactions`), orderBy("createdAt", "desc"), limit(5));
+    let lastReactionTime = Date.now();
+    onSnapshot(rq, (snap) => {
+        snap.forEach(doc => {
+            const r = doc.data();
+            const rTime = r.createdAt?.toDate ? r.createdAt.toDate().getTime() : Date.now();
+            if (rTime > lastReactionTime && r.uid !== auth.currentUser.uid) {
+                window.showFloatingEmoji(r.emoji);
+            }
+        });
+        lastReactionTime = Date.now();
+    });
+};
+
+window.toggleFocusTimer = async () => {
+    if (!AppState.isHost || !AppState.realtimeRoom) return;
+    const active = !AppState.realtimeRoom.timer.active;
+    await updateDoc(doc(db, "rooms", AppState.realtimeRoom.id), {
+        "timer.active": active,
+        "timer.startTime": active ? serverTimestamp() : null
+    });
+};
+
+
+window.renderRoomUI = () => {
+    if (currentRoute !== 'room-session') return;
+    const room = AppState.realtimeRoom;
+    
+    // Update timer button if host
+    const tBtn = document.getElementById('btn-toggle-timer');
+    if (tBtn) tBtn.textContent = room.timer.active ? "Stop Focus" : "Start Focus";
+    
+    // Add enter key listener to chat once
+    const chatInput = document.getElementById('room-chat-input');
+    if (chatInput && !chatInput.dataset.listener) {
+        chatInput.dataset.listener = "true";
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') window.sendRoomMessage();
+        });
+    }
+
+    // Render participants
+    const pList = document.getElementById('room-participants');
+    if (pList) {
+        pList.innerHTML = Object.entries(room.participants).map(([id, p]) => `
+            <div class="participant-card ${id === room.hostId ? 'host' : ''}">
+                <div class="status-dot ${p.status}"></div>
+                <img src="${p.photo || 'https://ui-avatars.com/api/?name='+p.name}" style="width:32px; height:32px; border-radius:50%;">
+                <div style="flex:1">
+                    <div style="font-size:0.8rem; font-weight:700;">${p.name} ${id === room.hostId ? '👑' : ''}</div>
+                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase;">${p.status}</div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Timer logic
+    const timerDisplay = document.getElementById('room-timer-display');
+    if (timerDisplay && room.timer.active) {
+        // Simple client-side countdown based on server startTime
+        // This would be more complex with offsets but good enough for now
+        const start = room.timer.startTime?.toDate ? room.timer.startTime.toDate() : new Date();
+        const updateTimer = () => {
+            const elapsed = Math.floor((new Date() - start) / 1000);
+            const remaining = Math.max(0, (room.timer.duration * 60) - elapsed);
+            const mins = Math.floor(remaining / 60);
+            const secs = remaining % 60;
+            timerDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            if (remaining === 0) {
+                document.getElementById('timer-status').textContent = "Break Time!";
+                timerDisplay.style.color = "var(--success)";
+            }
+        };
+        updateTimer();
+        if (window.roomTimerInterval) clearInterval(window.roomTimerInterval);
+        window.roomTimerInterval = setInterval(updateTimer, 1000);
+    }
+
+    // Content Broadcast
+    const bArea = document.getElementById('broadcast-content');
+    if (bArea && room.currentContent) {
+        if (AppState.lastBroadcastId !== room.currentContent.id) {
+            AppState.lastBroadcastId = room.currentContent.id;
+            document.getElementById('broadcast-title').textContent = room.currentContent.title;
+            // Render the content (Flashcard/Quiz etc)
+            if (room.currentContent.type === 'flashcard') {
+                const deck = room.currentContent.data;
+                bArea.innerHTML = `<div class="flashcard-container" id="room-flashcard-active" onclick="this.classList.toggle('flipped')">
+                    <div class="flashcard">
+                        <div class="front"><h3>${deck[0].front}</h3></div>
+                        <div class="back"><p>${deck[0].back}</p></div>
+                    </div>
+                </div>`;
+            } else {
+                bArea.innerHTML = `<div class="glass-panel" style="width:100%"><pre style="white-space:pre-wrap">${JSON.stringify(room.currentContent.data, null, 2)}</pre></div>`;
+            }
+        }
+    }
+};
+
+window.renderRoomMessages = (messages) => {
+    const mList = document.getElementById('room-messages');
+    if (!mList) return;
+    const isAtBottom = mList.scrollHeight - mList.scrollTop <= mList.clientHeight + 50;
+    mList.innerHTML = messages.map(m => {
+        const isMe = m.uid === auth.currentUser.uid;
+        if (m.type === 'source_share') {
+            const s = m.source;
+            return `
+            <div style="margin-bottom:1rem; display:flex; flex-direction:column; align-items: center; width:100%;">
+                <div style="font-size:0.6rem; color:var(--text-muted); margin-bottom:0.25rem;">${m.userName} shared a source</div>
+                <div class="glass-panel" style="background:rgba(59,130,246,0.1); border:1px solid var(--accent); padding:1rem; border-radius:1rem; width:80%; max-width:400px;">
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                        <img src="https://www.google.com/s2/favicons?domain=${s.displayLink}&sz=32" style="width:16px; height:16px;">
+                        <span style="font-size:0.7rem; color:var(--text-muted);">${s.displayLink}</span>
+                    </div>
+                    <h4 style="margin:0; font-size:0.9rem; color:white;">${s.title}</h4>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin:0.5rem 0;">${s.snippet.substring(0, 100)}...</p>
+                    <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+                        <button class="btn btn-primary btn-sm" onclick="window.open('${s.link}', '_blank')" style="font-size:0.7rem; flex:1;">Open</button>
+                        <button class="btn btn-secondary btn-sm" onclick='window.saveSource(${JSON.stringify(s).replace(/'/g, "&apos;")})' style="font-size:0.7rem; flex:1;">Save</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+        return `
+        <div style="margin-bottom:0.5rem; display:flex; flex-direction:column; align-items: ${isMe ? 'flex-end' : 'flex-start'}">
+            <div style="font-size:0.6rem; color:var(--text-muted); margin-bottom:0.1rem;">${m.userName}</div>
+            <div class="chat-bubble ${isMe ? 'user' : 'ai'}" style="padding:0.4rem 0.8rem; font-size:0.85rem; max-width:90%;">
+                ${m.text}
+            </div>
+        </div>
+        `;
+    }).join('');
+
+    if (isAtBottom) mList.scrollTop = mList.scrollHeight;
+};
+
+window.sendRoomMessage = async () => {
+    const input = document.getElementById('room-chat-input');
+    const text = input.value.trim();
+    if (!text || !AppState.realtimeRoom) return;
+    input.value = "";
+    await addDoc(collection(db, `rooms/${AppState.realtimeRoom.id}/messages`), {
+        uid: auth.currentUser.uid,
+        userName: auth.currentUser.displayName || "User",
+        text,
+        createdAt: serverTimestamp()
+    });
+};
+
+window.sendReaction = async (emoji) => {
+    if (!AppState.realtimeRoom) return;
+    await addDoc(collection(db, `rooms/${AppState.realtimeRoom.id}/reactions`), {
+        emoji,
+        uid: auth.currentUser.uid,
+        createdAt: serverTimestamp()
+    });
+    window.showFloatingEmoji(emoji);
+};
+
+window.showFloatingEmoji = (emoji) => {
+    const container = document.getElementById('reaction-overlay');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'floating-emoji';
+    el.textContent = emoji;
+    el.style.left = Math.random() * 100 + 'px';
+    container.appendChild(el);
+    setTimeout(() => el.remove(), 3000);
+};
+
+window.leaveRealtimeRoom = () => {
+    if (roomUnsubscribe) roomUnsubscribe();
+    if (window.roomTimerInterval) clearInterval(window.roomTimerInterval);
+    AppState.realtimeRoom = null;
+    AppState.isHost = false;
+    window.navigate('study-rooms');
+};
+
+window.showPushContentModal = () => {
+    // Show current local assets to push
+    const assets = [
+        ...AppState.flashcards.map(f => ({ type: 'flashcard', title: f.title, data: f.cards })),
+        ...AppState.quizzes.map(q => ({ type: 'quiz', title: q.title, data: q.questions }))
+    ];
+    window.showModal('Broadcast Content', `
+        <p style="margin-bottom:1rem; color:var(--text-muted);">Select content to push to all participants.</p>
+        <div style="display:flex; flex-direction:column; gap:0.5rem; max-height:300px; overflow-y:auto;">
+            ${assets.length === 0 ? '<p>No content available to share. Generate some first!</p>' : 
+            assets.map((a, i) => `
+                <div class="source-item" onclick="window.broadcastContent(${i})">
+                    <ion-icon name="${a.type==='quiz'?'checkbox-outline':'copy-outline'}"></ion-icon>
+                    <div class="source-title">${a.title}</div>
+                    <div style="font-size:0.7rem; color:var(--accent)">${a.type.toUpperCase()}</div>
+                </div>
+            `).join('')}
+        </div>
+    `);
+    // Local assets mapping for modal
+    window._tempAssets = assets;
+};
+
+window.broadcastContent = async (index) => {
+    const asset = window._tempAssets[index];
+    if (!asset || !AppState.realtimeRoom) return;
+    await updateDoc(doc(db, "rooms", AppState.realtimeRoom.id), {
+        currentContent: {
+            id: Math.random().toString(36),
+            type: asset.type,
+            title: asset.title,
+            data: asset.data
+        }
+    });
+    document.getElementById('modal-container').classList.add('hidden');
+    showToast(`Broadcasting ${asset.title}...`, "success");
+};
+
 
 const getComplexityModifier = (level) => {
     const mods = {
@@ -556,6 +992,13 @@ const Views = {
         <div class="glass-panel" style="max-width: 600px;">
             <h2 style="font-size: 2rem; margin-bottom: 2rem">System Configuration</h2>
             <div class="form-group"><label>Gemini API Key</label><input type="password" id="input-api-key" class="form-control" value="${AppState.apiKey}"></div>
+            
+            <div style="margin-top:2rem; padding-top:2rem; border-top:1px solid var(--border-color);">
+                <h3 style="margin-bottom:1rem; font-size:1.1rem;">Web Search Integration (Google)</h3>
+                <div class="form-group"><label>Google Search API Key</label><input type="password" id="input-search-api-key" class="form-control" value="${AppState.searchConfig.apiKey}"></div>
+                <div class="form-group" style="margin-top:1rem;"><label>Search Engine ID (CX)</label><input type="text" id="input-search-cx" class="form-control" value="${AppState.searchConfig.cx}"></div>
+            </div>
+
             <div class="form-group" style="margin-top: 1.5rem"><label>Study Mode</label>
                 <select id="input-study-mode" class="form-control">
                     <option value="casual" ${AppState.settings.studyMode==='casual'?'selected':''}>Casual - Fun & Encouraging</option>
@@ -565,6 +1008,50 @@ const Views = {
             </div>
             <button class="btn btn-primary" id="btn-save-settings" style="margin-top: 2.5rem; width:100%">Save Configuration</button>
         </div>`,
+    'search-sources': () => `
+        <div class="glass-panel">
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Search Sources</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Discover credible academic papers, articles, and educational content.</p>
+            
+            <div class="chat-input-area" style="margin-bottom: 2rem;">
+                <input type="text" id="search-input" placeholder="What are you researching today?" autocomplete="off" style="font-size:1.1rem; padding:1.2rem;">
+                <button class="btn btn-primary" onclick="window.executeSearch()" style="padding:0 2rem;"><ion-icon name="search" style="font-size:1.5rem;"></ion-icon></button>
+            </div>
+
+            <div style="display:flex; gap:0.5rem; margin-bottom:2rem; flex-wrap:wrap;">
+                <span style="font-size:0.8rem; color:var(--text-muted); align-self:center; margin-right:0.5rem;">Quick Filters:</span>
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('search-input').value += ' site:.edu'; window.executeSearch()">Academic (.edu)</button>
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('search-input').value += ' peer reviewed'; window.executeSearch()">Peer Reviewed</button>
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('search-input').value += ' statistics'; window.executeSearch()">Statistics</button>
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('search-input').value += ' video'; window.executeSearch()">Videos</button>
+            </div>
+
+            <div id="search-status" style="text-align:center; color:var(--accent); font-weight:600; margin-bottom:1rem;"></div>
+            
+            <div id="search-results-list" style="min-height:200px;">
+                <div style="text-align:center; padding:5rem; color:var(--text-muted); border:2px dashed var(--border-color); border-radius:1.5rem;">
+                    <ion-icon name="globe-outline" style="font-size:3rem; opacity:0.2; margin-bottom:1rem;"></ion-icon>
+                    <p>Enter a query above to explore the web.</p>
+                </div>
+            </div>
+
+            <div style="margin-top:4rem;">
+                <h3 style="margin-bottom:1.5rem;">Saved to Library</h3>
+                <div id="library-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:1rem;">
+                    ${(AppState.sourceLibrary || []).length === 0 ? '<p style="color:var(--text-muted); grid-column:1/-1;">Your source library is empty.</p>' : 
+                    AppState.sourceLibrary.map(s => `
+                        <div class="glass-panel" style="background:rgba(255,255,255,0.03); padding:1rem;">
+                            <h4 style="margin:0; font-size:0.9rem; margin-bottom:0.5rem;">${s.title}</h4>
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted);">${s.displayLink}</span>
+                                <button class="btn btn-secondary btn-sm" onclick="window.open('${s.link}', '_blank')" style="font-size:0.6rem;">Visit</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>`,
+
     flashcards: () => {
         const decks = AppState.flashcards || [];
         return `
@@ -583,10 +1070,14 @@ const Views = {
                 ${decks.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No decks created yet.</p>' : 
                 decks.map((d, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1rem;">
                     <div><h4 style="margin:0">${d.title}</h4><p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${d.cards.length} cards &bull; ${d.date}</p></div>
-                    <button class="btn btn-secondary btn-sm" onclick="window.studyDeck(${i})">Study</button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-secondary btn-sm" onclick="window.navigate('search-sources'); setTimeout(() => { document.getElementById('search-input').value = '${d.title}'; window.executeSearch(); }, 100)">Find Sources</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window.studyDeck(${i})">Study</button>
+                    </div>
                 </div>`).join('')}
             </div>
         </div>`;
+
     },
     quizzes: () => {
         const quizzes = AppState.quizzes || [];
@@ -606,10 +1097,14 @@ const Views = {
                 ${quizzes.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No assessments completed yet.</p>' : 
                 quizzes.map((q, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1rem;">
                     <div><h4 style="margin:0">${q.title}</h4><p style="margin:0; font-size:0.8rem; color:var(--text-muted)">Score: ${q.score}% &bull; ${q.date}</p></div>
-                    <button class="btn btn-secondary btn-sm" onclick="window.viewQuiz(${i})">View</button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-secondary btn-sm" onclick="window.navigate('search-sources'); setTimeout(() => { document.getElementById('search-input').value = '${q.title}'; window.executeSearch(); }, 100)">Find Sources</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window.viewQuiz(${i})">View</button>
+                    </div>
                 </div>`).join('')}
             </div>
         </div>`;
+
     },
     overviews: () => {
         const overviews = AppState.overviews || [];
@@ -623,23 +1118,29 @@ const Views = {
                 ${complexitySelector('overview-complexity')}
             </div>
 
-            <div class="studio-generator-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+            <div class="studio-generator-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
                 <div class="studio-gen-card glass-panel" onclick="window.generateOverview('summary')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
                     <ion-icon name="document-text-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
                     <h3>Executive Summary</h3>
                     <p>High-level brief of key points.</p>
-                </div>
-                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('infographic')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
-                    <ion-icon name="pie-chart-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
-                    <h3>Infographic Flow</h3>
-                    <p>Mermaid diagram representation.</p>
                 </div>
                 <div class="studio-gen-card glass-panel" onclick="window.generateOverview('datatable')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
                     <ion-icon name="grid-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
                     <h3>Data Table</h3>
                     <p>Structured tabular data extraction.</p>
                 </div>
+                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('infographic')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
+                    <ion-icon name="pie-chart-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>Neural Map (Mermaid)</h3>
+                    <p>Mermaid diagram representation.</p>
+                </div>
+                <div class="studio-gen-card glass-panel" onclick="window.generateOverview('knowledgemap')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
+                    <ion-icon name="git-branch-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>Knowledge Map (Interactive)</h3>
+                    <p>Force-directed interactive map.</p>
+                </div>
             </div>
+
             
             <div id="overview-status" style="margin-top:2rem; text-align:center; font-weight:600; color:var(--accent)"></div>
             <div id="overview-workspace" class="glass-panel" style="margin-top:2rem; display:none; background: rgba(15,23,42,0.8)"></div>
@@ -653,9 +1154,13 @@ const Views = {
                             <h4 style="margin:0">${o.type.toUpperCase()} Overview</h4>
                             <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${new Date(o.date).toLocaleDateString()}</p>
                         </div>
-                        <button class="btn btn-secondary btn-sm" onclick="window.viewOverview(${i})">View</button>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button class="btn btn-secondary btn-sm" onclick="window.navigate('search-sources'); setTimeout(() => { document.getElementById('search-input').value = '${o.type.toUpperCase()} from study material'; window.executeSearch(); }, 100)">Find Sources</button>
+                            <button class="btn btn-secondary btn-sm" onclick="window.viewOverview(${i})">View</button>
+                        </div>
                     </div>
                 `).join('')}
+
             </div>
         </div>`;
     },
@@ -692,48 +1197,156 @@ const Views = {
         const rooms = AppState.rooms || [];
         return `
         <div class="glass-panel">
-            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Study Rooms Manager</h2>
-            <p style="color:var(--text-muted); margin-bottom: 2rem;">Manage all your study rooms, sources, and assets in one place.</p>
-            <div style="display:flex; flex-direction: column; gap: 1rem;">
-                ${rooms.length === 0 ? '<p style="color:var(--text-muted); text-align:center; padding:3rem;">No rooms yet. Create one from the Dashboard!</p>' :
-                rooms.map((r, i) => `
-                    <div class="glass-panel" style="background: rgba(255,255,255,0.03); padding: 1.5rem; border-radius: 1.5rem;">
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem">
-                            <div style="display:flex; align-items:center; gap:0.75rem">
-                                <ion-icon name="folder-open-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
-                                <h3 style="margin:0">${r.title}</h3>
-                                ${AppState.currentRoomIndex === i ? '<span style="background:rgba(59,130,246,0.2); color:var(--accent); padding:0.2rem 0.75rem; border-radius:2rem; font-size:0.7rem; font-weight:700;">ACTIVE</span>' : ''}
-                            </div>
-                            <div style="display:flex; gap:0.5rem;">
-                                <button class="btn btn-secondary btn-sm" onclick="window.setActiveRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem;">Switch To</button>
-                                <button class="btn btn-secondary btn-sm" onclick="window.renameRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem;">Rename</button>
-                                <button class="btn btn-sm" onclick="window.deleteRoom(${i})" style="padding:0.4rem 0.9rem; font-size:0.8rem; border-radius:2rem; background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3);">Delete</button>
-                            </div>
-                        </div>
-                        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;">
-                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
-                                <div style="font-size:1.5rem; font-weight:800; color:var(--accent)">${(r.documents||[]).length}</div>
-                                <div style="font-size:0.7rem; color:var(--text-muted)">Sources</div>
-                            </div>
-                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
-                                <div style="font-size:1.5rem; font-weight:800; color:#10b981">${(r.flashcards||[]).length}</div>
-                                <div style="font-size:0.7rem; color:var(--text-muted)">Decks</div>
-                            </div>
-                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
-                                <div style="font-size:1.5rem; font-weight:800; color:#8b5cf6">${(r.quizzes||[]).length}</div>
-                                <div style="font-size:0.7rem; color:var(--text-muted)">Quizzes</div>
-                            </div>
-                            <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
-                                <div style="font-size:1.5rem; font-weight:800; color:#f59e0b">${(r.presentations||[]).length}</div>
-                                <div style="font-size:0.7rem; color:var(--text-muted)">Slides</div>
-                            </div>
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Study Rooms</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Collaborate in real-time or manage your private research environments.</p>
+            
+            <div class="dashboard-tabs" style="margin-bottom: 2rem;">
+                <div class="dashboard-tab ${AppState.activeDashboardTab === 'realtime' ? 'active' : ''}" onclick="window.setDashboardTab('realtime')">Real-time Groups</div>
+                <div class="dashboard-tab ${AppState.activeDashboardTab === 'rooms' ? 'active' : ''}" onclick="window.setDashboardTab('rooms')">Private Environments</div>
+            </div>
+
+            <div id="study-rooms-realtime" style="display: ${AppState.activeDashboardTab === 'realtime' ? 'block' : 'none'}">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+                    <div class="glass-panel" style="background:rgba(59,130,246,0.05); text-align:center; padding:2rem;">
+                        <ion-icon name="add-circle-outline" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></ion-icon>
+                        <h3>Host a Room</h3>
+                        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1.5rem;">Create a shared space for your classmates.</p>
+                        <button class="btn btn-primary" onclick="window.showCreateRealtimeModal()" style="width:100%">Create Room</button>
+                    </div>
+                    <div class="glass-panel" style="background:rgba(16,185,129,0.05); text-align:center; padding:2rem;">
+                        <ion-icon name="enter-outline" style="font-size:3rem; color:var(--success); margin-bottom:1rem;"></ion-icon>
+                        <h3>Join via Code</h3>
+                        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1.5rem;">Enter a 6-digit room code to join a session.</p>
+                        <div style="display:flex; gap:0.5rem;">
+                            <input type="text" id="join-room-code" class="form-control" placeholder="STUDY-XXXX" style="text-align:center; text-transform:uppercase;">
+                            <button class="btn btn-success" onclick="window.joinRealtimeRoom()">Join</button>
                         </div>
                     </div>
-                `).join('')}
+                </div>
+
+                <h3 style="margin-bottom:1rem;">Discover Public Rooms</h3>
+                <div id="public-rooms-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap:1rem;">
+                    <p style="color:var(--text-muted); text-align:center; grid-column: 1/-1; padding:2rem;">Searching for active study groups...</p>
+                </div>
             </div>
-            <button class="btn btn-primary" onclick="window.createRoom()" style="margin-top:2rem; width:100%"><ion-icon name="add-outline"></ion-icon> Create New Room</button>
+
+            <div id="study-rooms-local" style="display: ${AppState.activeDashboardTab === 'rooms' ? 'block' : 'none'}">
+                <div style="display:flex; flex-direction: column; gap: 1rem;">
+                    ${rooms.length === 0 ? '<p style="color:var(--text-muted); text-align:center; padding:3rem;">No private rooms yet.</p>' :
+                    rooms.map((r, i) => `
+                        <div class="glass-panel" style="background: rgba(255,255,255,0.03); padding: 1.5rem; border-radius: 1.5rem;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem">
+                                <div style="display:flex; align-items:center; gap:0.75rem">
+                                    <ion-icon name="folder-open-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                                    <h3 style="margin:0">${r.title}</h3>
+                                    ${AppState.currentRoomIndex === i ? '<span style="background:rgba(59,130,246,0.2); color:var(--accent); padding:0.2rem 0.75rem; border-radius:2rem; font-size:0.7rem; font-weight:700;">ACTIVE</span>' : ''}
+                                </div>
+                                <div style="display:flex; gap:0.5rem;">
+                                    <button class="btn btn-secondary btn-sm" onclick="window.setActiveRoom(${i})">Switch To</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="window.renameRoom(${i})">Rename</button>
+                                    <button class="btn btn-sm" onclick="window.deleteRoom(${i})" style="background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3);">Delete</button>
+                                </div>
+                            </div>
+                            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;">
+                                <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                    <div style="font-size:1.25rem; font-weight:800; color:var(--accent)">${(r.documents||[]).length}</div>
+                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase;">Sources</div>
+                                </div>
+                                <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                    <div style="font-size:1.25rem; font-weight:800; color:#10b981">${(r.flashcards||[]).length}</div>
+                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase;">Decks</div>
+                                </div>
+                                <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                    <div style="font-size:1.25rem; font-weight:800; color:#8b5cf6">${(r.quizzes||[]).length}</div>
+                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase;">Quizzes</div>
+                                </div>
+                                <div style="background:rgba(255,255,255,0.05); padding:0.75rem; border-radius:1rem; text-align:center;">
+                                    <div style="font-size:1.25rem; font-weight:800; color:#f59e0b">${(r.presentations||[]).length}</div>
+                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase;">Slides</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <button class="btn btn-primary" onclick="window.createRoom()" style="margin-top:2rem; width:100%"><ion-icon name="add-outline"></ion-icon> Create New Environment</button>
+            </div>
         </div>`;
     },
+    'room-session': () => {
+        const room = AppState.realtimeRoom;
+        if (!room) return `<div class="glass-panel"><h3>Error: No active session</h3><button class="btn btn-primary" onclick="window.navigate('study-rooms')">Back</button></div>`;
+        return `
+        <div class="room-layout">
+            <div class="room-main-area">
+                <!-- Sync Timer Panel -->
+                <div class="sync-timer-panel" id="room-timer-panel">
+                    <div class="timer-circle" id="room-timer-display">25:00</div>
+                    <div>
+                        <h3 id="timer-status">Focus Session</h3>
+                        <p style="color:var(--text-muted); font-size:0.85rem;" id="timer-participants-focused">0 / 0 members focused</p>
+                    </div>
+                    <div class="flex-spacer"></div>
+                    ${AppState.isHost ? `
+                        <button class="btn btn-primary btn-sm" onclick="window.toggleFocusTimer()" id="btn-toggle-timer">Start Focus</button>
+                    ` : `
+                        <div id="user-focus-status" class="status-badge active">FOCUSED</div>
+                    `}
+                </div>
+
+
+                <!-- Content Broadcast Area -->
+                <div class="glass-panel" style="flex:1; display:flex; flex-direction:column;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                        <h3 id="broadcast-title">Shared Study Materials</h3>
+                        ${AppState.isHost ? `
+                            <button class="btn btn-secondary btn-sm" onclick="window.showPushContentModal()">Push Content</button>
+                        ` : ''}
+                    </div>
+                    <div id="broadcast-content" class="broadcast-area">
+                        <div style="text-align:center;">
+                            <ion-icon name="cloud-upload-outline" style="font-size:3rem; opacity:0.3;"></ion-icon>
+                            <p>Waiting for host to broadcast content...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="room-sidebar">
+                <div class="glass-panel" style="padding:1.25rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <h3 style="font-size:1rem;">Participants</h3>
+                        <span style="font-size:0.75rem; color:var(--accent); font-weight:700;">CODE: ${room.code}</span>
+                    </div>
+                    <div class="participant-list" id="room-participants">
+                        <!-- Participants injected here -->
+                    </div>
+                </div>
+
+                <div class="room-chat">
+                    <div style="padding:1rem; border-bottom:1px solid var(--border-color); font-weight:700; font-size:0.9rem;">Room Chat</div>
+                    <div class="room-chat-messages" id="room-messages">
+                        <!-- Messages injected here -->
+                    </div>
+                    <div class="room-chat-input">
+                        <input type="text" id="room-chat-input" class="form-control" placeholder="Message group..." autocomplete="off">
+                        <button class="btn btn-primary" onclick="window.sendRoomMessage()"><ion-icon name="send"></ion-icon></button>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:0.5rem; justify-content:center; padding:0.5rem; background:rgba(255,255,255,0.02); border-radius:1rem;">
+                    <button class="btn btn-secondary btn-sm" onclick="window.sendReaction('💡')" style="padding:0.5rem; font-size:1.25rem;">💡</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.sendReaction('🔥')" style="padding:0.5rem; font-size:1.25rem;">🔥</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.sendReaction('✅')" style="padding:0.5rem; font-size:1.25rem;">✅</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.sendReaction('❓')" style="padding:0.5rem; font-size:1.25rem;">❓</button>
+                </div>
+                
+                <button class="btn btn-sm" onclick="window.leaveRealtimeRoom()" style="background:rgba(239,68,68,0.1); color:#ef4444; border:1px solid rgba(239,68,68,0.2); width:100%;">Leave Room</button>
+            </div>
+        </div>
+        <div class="reaction-overlay" id="reaction-overlay"></div>
+        `;
+    },
+
     'blur-study': () => `
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Blur Study: The Semantic Heatmap</h2>
@@ -782,7 +1395,68 @@ const Views = {
                 </div>
             </div>
         </div>`,
+    podcast: () => `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">&#127897; Podcast Engine</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate an AI-hosted dual-voice study podcast from your sources.</p>
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                ${customFocusInput('input-podcast-focus')}
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Show Format</label>
+                    <select id="podcast-format" class="form-control">
+                        <option value="deep_dive">🔬 The Deep Dive</option>
+                        <option value="rapid_fire">⚡ Rapid Fire</option>
+                        <option value="debate">⚔️ The Debate</option>
+                        <option value="storyteller">📖 The Storyteller</option>
+                        <option value="oral_exam">🎓 The Oral Exam</option>
+                    </select>
+                </div>
+            </div>
+            <button class="btn btn-primary" id="btn-gen-podcast" style="width:100%; margin-bottom:1.5rem;">&#127897; Generate Podcast Script</button>
+            <div id="podcast-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+            <div id="podcast-player" style="display:none; padding:1.5rem; background:rgba(255,255,255,0.02); border-radius:1.5rem; border:1px solid var(--border-color);">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
+                    <div style="display:flex;align-items:center;gap:0.75rem;">
+                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#8b5cf6);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-a-avatar">A</div>
+                        <div><div style="font-weight:700;font-size:0.9rem;">Host Alex</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-a-label">Waiting...</div></div>
+                    </div>
+                    <div id="podcast-waveform" style="display:flex;gap:3px;align-items:center;height:30px;">
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:24px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.75rem;">
+                        <div style="text-align:right;"><div style="font-weight:700;font-size:0.9rem;">Host Blake</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-b-label">Waiting...</div></div>
+                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#10b981,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-b-avatar">B</div>
+                    </div>
+                </div>
+                <div id="podcast-now-playing" style="text-align:center; padding:1.25rem; background:rgba(0,0,0,0.2); border-radius:1rem; margin-bottom:1.25rem; font-size:1rem; line-height:1.7; min-height:80px; font-style:italic;">Press Play to begin...</div>
+                <div style="display:flex;align-items:center;justify-content:center;gap:0.75rem;flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" id="btn-podcast-prev">&#8676; Prev</button>
+                    <button class="btn btn-primary" id="btn-podcast-play" style="padding:0.85rem 2.5rem;min-width:120px;">&#9654; Play</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-podcast-next">Next &#8677;</button>
+                    <button class="btn" id="btn-third-mic" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:2rem;padding:0.7rem 1.25rem;font-size:0.85rem;cursor:pointer;">&#127908; Third Mic</button>
+                </div>
+                <div style="margin-top:1.25rem;">
+                    <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:2rem;overflow:hidden;">
+                        <div id="podcast-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#8b5cf6);border-radius:2rem;transition:width 0.3s;"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="third-mic-panel" style="display:none; margin-top:1.5rem; padding:1.5rem; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3); border-radius:1.5rem;">
+                <h3 style="color:#ef4444; margin-bottom:0.75rem;">&#127908; You have interrupted the hosts!</h3>
+                <textarea id="third-mic-input" class="blurt-textarea" style="min-height:80px;" placeholder="What didn't land? Ask away..."></textarea>
+                <div style="display:flex;gap:1rem;margin-top:1rem;">
+                    <button class="btn btn-primary btn-sm" id="btn-third-mic-submit">Ask the Hosts</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-third-mic-cancel">Resume Podcast</button>
+                </div>
+                <div id="third-mic-response" style="margin-top:1rem;display:none;padding:1rem;background:rgba(255,255,255,0.03);border-radius:0.75rem;font-style:italic;line-height:1.7;"></div>
+            </div>
+        </div>`,
     'review-mistakes': () => {
+
         const wrongAnswers = AppState.wrongAnswers || [];
         return `
         <div class="glass-panel">
@@ -872,8 +1546,116 @@ const Views = {
 
 
 // ==========================================
-// CORE LOGIC & NAVIGATION
+// PODCAST ENGINE — LOGIC
 // ==========================================
+
+const bindPodcastEvents = () => {
+    let podcastLines = [];
+    let podcastIdx = 0;
+    let isPlaying = false;
+    let synth = window.speechSynthesis;
+    let voiceA = null;
+    let voiceB = null;
+
+    const getVoices = () => {
+        const voices = synth.getVoices();
+        if (!voices.length) return;
+        const enVoices = voices.filter(v => v.lang.startsWith('en'));
+        voiceA = enVoices.find(v => /female|woman|zira|samantha|victoria/i.test(v.name)) || enVoices[0];
+        voiceB = enVoices.find(v => v !== voiceA && /male|man|david|daniel|alex/i.test(v.name)) || enVoices[1] || enVoices[0];
+    };
+
+    if (synth.onvoiceschanged !== undefined) synth.onvoiceschanged = getVoices;
+    getVoices();
+
+    const speakLine = (idx) => {
+        if (idx >= podcastLines.length) { stopPlayback(); return; }
+        const line = podcastLines[idx];
+        const nowPlaying = document.getElementById('podcast-now-playing');
+        const progressBar = document.getElementById('podcast-progress-bar');
+
+        if (nowPlaying) {
+            const hostColor = line.host === 'A' ? '#3b82f6' : '#10b981';
+            nowPlaying.innerHTML = `<span style="font-size:0.7rem;font-weight:800;color:${hostColor};text-transform:uppercase;display:block;margin-bottom:0.5rem;">${line.host === 'A' ? 'Alex' : 'Blake'}</span>${line.text}`;
+        }
+        if (progressBar) progressBar.style.width = `${((idx + 1) / podcastLines.length) * 100}%`;
+
+        synth.cancel();
+        const utt = new SpeechSynthesisUtterance(line.text);
+        utt.voice = line.host === 'A' ? voiceA : voiceB;
+        utt.onend = () => { if (isPlaying) { podcastIdx = idx + 1; speakLine(podcastIdx); } };
+        synth.speak(utt);
+    };
+
+    const stopPlayback = () => {
+        isPlaying = false;
+        synth.cancel();
+        const playBtn = document.getElementById('btn-podcast-play');
+        if (playBtn) playBtn.innerHTML = '&#9654; Play';
+    };
+
+    const startPlayback = () => {
+        if (podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
+        isPlaying = true;
+        const playBtn = document.getElementById('btn-podcast-play');
+        if (playBtn) playBtn.innerHTML = '&#9646;&#9646; Pause';
+        speakLine(podcastIdx);
+    };
+
+    const genBtn = document.getElementById('btn-gen-podcast');
+    if (genBtn) {
+        genBtn.onclick = async () => {
+            if (AppState.activeSourceIndices.length === 0) return showToast('Select sources first', 'error');
+            const statusEl = document.getElementById('podcast-status');
+            statusEl.textContent = 'Gemini is writing your podcast script...';
+            genBtn.disabled = true;
+
+            try {
+                const parts = getActiveContextParts();
+                parts.push({ text: `Generate a 15-line study podcast script about the provided material between Host Alex (A) and Host Blake (B). Return ONLY raw JSON: {"lines":[{"host":"A","text":"..."},{"host":"B","text":"..."}]}` });
+                const res = await callGemini(parts, 'You are a podcast writer.', null, 'application/json');
+                const data = parseJsonSafe(res);
+                podcastLines = data.lines || [];
+                podcastIdx = 0;
+                document.getElementById('podcast-player').style.display = 'block';
+                statusEl.textContent = '';
+                genBtn.disabled = false;
+                showToast("Podcast ready!", "success");
+            } catch (e) {
+                statusEl.textContent = e.message;
+                genBtn.disabled = false;
+            }
+        };
+    }
+
+    document.getElementById('btn-podcast-play').onclick = () => isPlaying ? stopPlayback() : startPlayback();
+    document.getElementById('btn-podcast-prev').onclick = () => { if (podcastIdx > 0) { podcastIdx--; if (isPlaying) speakLine(podcastIdx); } };
+    document.getElementById('btn-podcast-next').onclick = () => { if (podcastIdx < podcastLines.length - 1) { podcastIdx++; if (isPlaying) speakLine(podcastIdx); } };
+    
+    document.getElementById('btn-third-mic').onclick = () => {
+        stopPlayback();
+        document.getElementById('third-mic-panel').style.display = 'block';
+    };
+
+    document.getElementById('btn-third-mic-submit').onclick = async () => {
+        const question = document.getElementById('third-mic-input').value;
+        if (!question) return;
+        const responseDiv = document.getElementById('third-mic-response');
+        responseDiv.style.display = 'block';
+        responseDiv.textContent = 'Hosts are improvising...';
+        const res = await callGemini([{ text: `The podcast discussed the material. Listener asked: "${question}". Hosts A and B should answer concisely in 3 lines. Return JSON: {"response":[{"host":"A","text":"..."}]}` }], 'Podcast hosts.', null, 'application/json');
+        const data = parseJsonSafe(res);
+        const insertLines = data.response || [];
+        responseDiv.innerHTML = insertLines.map(l => `<div><strong>${l.host}:</strong> ${l.text}</div>`).join('');
+        podcastLines.splice(podcastIdx, 0, ...insertLines);
+        setTimeout(() => { document.getElementById('third-mic-panel').style.display = 'none'; startPlayback(); }, 3000);
+    };
+    
+    document.getElementById('btn-third-mic-cancel').onclick = () => {
+        document.getElementById('third-mic-panel').style.display = 'none';
+        startPlayback();
+    };
+};
 
 window.navigate = (route) => {
     currentRoute = route;
@@ -895,10 +1677,25 @@ window.navigate = (route) => {
 
 const bindViewEvents = (route) => {
     if (route === 'settings') {
-        document.getElementById('btn-save-settings').onclick = () => {
-            saveState('apiKey', document.getElementById('input-api-key').value);
-            showToast('Settings saved!');
-        };
+        const sBtn = document.getElementById('btn-save-settings');
+        if (sBtn) {
+            sBtn.onclick = () => {
+                const newKey = document.getElementById('input-api-key').value.trim();
+                const newSearchKey = document.getElementById('input-search-api-key').value.trim();
+                const newSearchCx = document.getElementById('input-search-cx').value.trim();
+                
+                AppState.apiKey = newKey;
+                AppState.searchConfig.apiKey = newSearchKey;
+                AppState.searchConfig.cx = newSearchCx;
+                AppState.settings.studyMode = document.getElementById('input-study-mode').value;
+                
+                saveState('apiKey', AppState.apiKey);
+                saveState('searchConfig', AppState.searchConfig);
+                saveState('settings', AppState.settings);
+                showToast("Configuration saved successfully!", "success");
+                updateApiStatus();
+            };
+        }
     }
     
     if (route === 'studio') {
@@ -1036,10 +1833,24 @@ const bindViewEvents = (route) => {
                     systemInstruction = "Mermaid expert. Output raw syntax ONLY.";
                 } else if (type === 'datatable') {
                     prompt = `${complexityInstruction}${focusInstruction}Extract all quantitative data, lists of items, comparisons, or structured information from the text and present it as a Markdown Table. If there is no explicit data, synthesize a comparison table of the key concepts. Output pure Markdown.`;
+                } else if (type === 'knowledgemap') {
+                    prompt = `${complexityInstruction}${focusInstruction}Extract the 8-15 most important concepts from the source and their relationships. Return ONLY raw JSON: {"nodes":[{"id":"n1","label":"Main Concept","importance":5,"description":"brief description"},{"id":"n2","label":"Sub Concept","importance":3,"description":"brief description"}],"edges":[{"from":"n1","to":"n2","label":"contains","type":"hierarchy"}]}`;
+                    systemInstruction = "You are a knowledge graph expert. Return ONLY raw valid JSON.";
                 }
                 
                 parts.push({ text: prompt });
-                const res = await callGemini(parts, systemInstruction);
+                const res = await callGemini(parts, systemInstruction, null, type === 'knowledgemap' ? 'application/json' : null);
+                
+                if (type === 'knowledgemap') {
+                    const graph = parseJsonSafe(res);
+                    window.renderKnowledgeMap(workspace, graph);
+                } else if (type === 'infographic') {
+                    workspace.innerHTML = `<div class="mermaid">${res}</div>`;
+                    if (window.mermaid) mermaid.init(undefined, workspace.querySelectorAll('.mermaid'));
+                } else {
+                    workspace.innerHTML = `<div class="markdown-body" style="padding:1.5rem;">${marked.parse(res)}</div>`;
+                }
+
                 
                 const overview = { type, content: res, date: new Date().toISOString() };
                 AppState.overviews = AppState.overviews || [];
@@ -1785,6 +2596,156 @@ window.viewQuiz = (idx) => {
 
 
 // ==========================================
+// SEARCH SOURCES & DISCOVERY
+// ==========================================
+
+window.getCredibilityTier = (url) => {
+    const highDomains = ['.edu', '.gov', 'nature.com', 'sciencedirect.com', 'jstor.org', 'arxiv.org', 'springer.com', 'pubmed.gov', 'britannica.com'];
+    const mediumDomains = ['wikipedia.org', 'nytimes.com', 'bbc.com', 'reuters.com', 'theguardian.com', 'nationalgeographic.com', 'khanacademy.org'];
+    const domain = new URL(url).hostname;
+    if (highDomains.some(d => domain.endsWith(d))) return { tier: 'High', color: 'var(--success)', icon: 'shield-checkmark' };
+    if (mediumDomains.some(d => domain.endsWith(d))) return { tier: 'Medium', color: '#f59e0b', icon: 'shield' };
+    return { tier: 'Review', color: '#ef4444', icon: 'alert-circle' };
+};
+
+window.searchSources = async (query, filters = 'all') => {
+    const { apiKey, cx } = AppState.searchConfig;
+    if (!apiKey || !cx) {
+        showToast("Please configure Google Search API Key and CX in Settings.", "error");
+        window.navigate('settings');
+        return [];
+    }
+
+    const statusEl = document.getElementById('search-status');
+    if (statusEl) statusEl.textContent = 'Searching the web...';
+
+    try {
+        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        
+        if (data.error) throw new Error(data.error.message);
+
+        const results = (data.items || []).map(item => {
+            const cred = window.getCredibilityTier(item.link);
+            return {
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet,
+                displayLink: item.displayLink,
+                credibility: cred,
+                date: item.pagemap?.metatags?.[0]?.['article:published_time'] || item.pagemap?.metatags?.[0]?.['date'] || 'N/A'
+            };
+        });
+
+        if (statusEl) statusEl.textContent = '';
+        return results;
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Search failed: ' + e.message;
+        showToast("Search failed: " + e.message, "error");
+        return [];
+    }
+};
+
+window.saveSource = (source) => {
+    if (!AppState.sourceLibrary) AppState.sourceLibrary = [];
+    AppState.sourceLibrary.push({
+        ...source,
+        id: Math.random().toString(36).substring(2, 9),
+        savedAt: new Date().toISOString()
+    });
+    saveState('sourceLibrary', AppState.sourceLibrary);
+    showToast("Source saved to library!", "success");
+};
+
+window.summarizeSearchSource = async (source) => {
+    showToast("Fetching and summarizing...", "info");
+    try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(source.link)}`;
+        const resp = await fetch(proxyUrl);
+        const data = await resp.json();
+        const html = data.contents || "";
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('script, style, nav, footer, header').forEach(el => el.remove());
+        const text = tmp.textContent.substring(0, 15000);
+
+        const res = await callGemini([{ text: `SOURCE URL: ${source.link}\nCONTENT:\n${text}\n\nProvide a 3-5 sentence summary, a list of 5 key points, and a relevance note for a student studying this topic.` }], 'Academic Source Summarizer.');
+        
+        window.showModal(`Summary: ${source.title}`, `
+            <div class="markdown-body" style="font-size:0.9rem; padding:1.5rem;">${marked.parse(res)}</div>
+            <div style="padding:1.5rem; border-top:1px solid var(--border-color);">
+                <button class="btn btn-primary" onclick="window.saveSource(${JSON.stringify(source).replace(/"/g, '&quot;')})">Save to Library</button>
+            </div>
+        `);
+    } catch (e) {
+        showToast("Failed to summarize: " + e.message, "error");
+    }
+};
+
+window.shareSourceToRoom = async (source) => {
+    if (!AppState.realtimeRoom) return showToast("Join a Study Room first!", "error");
+    try {
+        await addDoc(collection(db, `rooms/${AppState.realtimeRoom.id}/messages`), {
+            text: `📢 Shared Source: ${source.title}`,
+            uid: auth.currentUser.uid,
+            userName: auth.currentUser.displayName,
+            photo: auth.currentUser.photoURL,
+            createdAt: serverTimestamp(),
+            type: 'source_share',
+            source: source
+        });
+        showToast("Source shared to room!", "success");
+    } catch (e) {
+        showToast("Failed to share: " + e.message, "error");
+    }
+};
+
+window.renderSearchResults = (results) => {
+    const list = document.getElementById('search-results-list');
+    if (!list) return;
+    if (results.length === 0) {
+        list.innerHTML = '<div style="text-align:center; padding:3rem; color:var(--text-muted);">No results found.</div>';
+        return;
+    }
+    list.innerHTML = results.map(r => `
+        <div class="glass-panel" style="background:rgba(255,255,255,0.02); padding:1.5rem; margin-bottom:1rem; border:1px solid var(--border-color); border-radius:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.75rem;">
+                <div style="flex:1;">
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                        <img src="https://www.google.com/s2/favicons?domain=${r.displayLink}&sz=32" style="width:16px; height:16px;">
+                        <span style="font-size:0.75rem; color:var(--text-muted);">${r.displayLink}</span>
+                    </div>
+                    <h3 style="margin:0; font-size:1.15rem;"><a href="${r.link}" target="_blank" style="color:var(--accent); text-decoration:none;">${r.title}</a></h3>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.4rem; padding:0.3rem 0.6rem; border-radius:2rem; background:rgba(0,0,0,0.2); border:1px solid ${r.credibility.color}">
+                    <ion-icon name="${r.credibility.icon}" style="color:${r.credibility.color}"></ion-icon>
+                    <span style="font-size:0.7rem; font-weight:800; color:${r.credibility.color}; text-transform:uppercase;">${r.credibility.tier}</span>
+                </div>
+            </div>
+            <p style="font-size:0.9rem; color:var(--text-muted); line-height:1.6; margin-bottom:1.25rem;">${r.snippet}</p>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:0.75rem; color:var(--text-muted);">${r.date !== 'N/A' ? 'Published: ' + r.date : ''}</span>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn btn-secondary btn-sm" onclick='window.saveSource(${JSON.stringify(r).replace(/'/g, "&apos;")})'>Save</button>
+                    <button class="btn btn-secondary btn-sm" onclick='window.summarizeSearchSource(${JSON.stringify(r).replace(/'/g, "&apos;")})'>Summarize</button>
+                    ${AppState.realtimeRoom ? `<button class="btn btn-secondary btn-sm" onclick='window.shareSourceToRoom(${JSON.stringify(r).replace(/'/g, "&apos;")})'>Share</button>` : ''}
+                </div>
+            </div>
+        </div>
+    `).join('');
+};
+
+window.executeSearch = async () => {
+    const input = document.getElementById('search-input');
+    const query = input ? input.value.trim() : "";
+    if (!query) return showToast("Enter a search term", "warning");
+    const results = await window.searchSources(query);
+    window.renderSearchResults(results);
+};
+
+
+// ==========================================
 // INITIALIZATION
 // ==========================================
 
@@ -1792,6 +2753,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLocalData();
     updateApiStatus();
     
+    document.querySelectorAll('.nav-links li').forEach(li => {
+        li.classList.remove('active');
+        if (li.dataset.view === currentRoute || (currentRoute === 'room-session' && li.dataset.view === 'study-rooms')) {
+            li.classList.add('active');
+        }
+    });
     document.querySelectorAll('.nav-links li').forEach(li => {
         li.onclick = () => {
             const route = li.dataset.route;
