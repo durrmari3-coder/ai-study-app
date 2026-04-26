@@ -213,35 +213,53 @@ const callGemini = async (prompt, systemInstruction = '', history = [], response
  */
 const parseJsonSafe = (text) => {
     try {
-        // Find the first '{' or '[' and the last '}' or ']'
-        const startBrace = text.indexOf('{');
-        const startBracket = text.indexOf('[');
+        // 1. First attempt: standard cleaning of markdown fences
+        let cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        
+        // 2. Find the first '{' or '[' and the last '}' or ']' if markdown cleanup wasn't enough
+        const startBrace = cleaned.indexOf('{');
+        const startBracket = cleaned.indexOf('[');
         let start = -1;
         if (startBrace !== -1 && startBracket !== -1) start = Math.min(startBrace, startBracket);
         else start = startBrace !== -1 ? startBrace : startBracket;
         
-        const endBrace = text.lastIndexOf('}');
-        const endBracket = text.lastIndexOf(']');
+        const endBrace = cleaned.lastIndexOf('}');
+        const endBracket = cleaned.lastIndexOf(']');
         let end = -1;
         if (endBrace !== -1 && endBracket !== -1) end = Math.max(endBrace, endBracket);
         else end = endBrace !== -1 ? endBrace : endBracket;
 
-        if (start === -1 || end === -1 || end < start) {
-            // Fallback to original cleaning if no clear boundaries
-            const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-            return JSON.parse(cleaned);
+        if (start !== -1 && end !== -1 && end >= start) {
+            cleaned = cleaned.substring(start, end + 1);
         }
 
-        const jsonStr = text.substring(start, end + 1);
-        return JSON.parse(jsonStr);
+        // 3. Handle common AI mistakes like trailing commas before closing braces/brackets
+        // This is a regex that looks for , followed by whitespace and } or ]
+        cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+
+        return JSON.parse(cleaned);
     } catch (error) {
         console.error("JSON Parse Error:", error, "Raw text:", text);
-        // Last ditch effort: strip common markdown noise
+        // Last ditch effort: more aggressive cleaning
         try {
-            const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            return JSON.parse(cleaned);
+            const extraCleaned = text
+                .replace(/\\n/g, "\\n")  
+                .replace(/\\'/g, "\\'")
+                .replace(/\\"/g, '\\"')
+                .replace(/\\&/g, "\\&")
+                .replace(/\\r/g, "\\r")
+                .replace(/\\t/g, "\\t")
+                .replace(/\\b/g, "\\b")
+                .replace(/\\f/g, "\\f");
+            // Find boundaries again in the extra cleaned text
+            const s = Math.max(extraCleaned.indexOf('{'), extraCleaned.indexOf('['));
+            const e = Math.max(extraCleaned.lastIndexOf('}'), extraCleaned.lastIndexOf(']'));
+            if (s !== -1 && e !== -1) {
+                return JSON.parse(extraCleaned.substring(s, e + 1).replace(/,\s*([}\]])/g, '$1'));
+            }
+            throw error;
         } catch (e) {
-            throw new Error("The AI returned an invalid format. Please try again.");
+            throw new Error("The AI returned an invalid format. Please try again or refine your focus instructions.");
         }
     }
 };
@@ -410,30 +428,41 @@ window.processIngest = async () => {
             
             const proxies = [
                 (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-                (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+                (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+                (url) => `https://thingproxy.freeboard.io/fetch/${url}`
             ];
 
             let success = false;
+            let lastErr = "";
             for (const getProxyUrl of proxies) {
                 try {
                     const proxyUrl = getProxyUrl(rawUrl);
-                    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
+                    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) });
                     if (resp.ok) {
-                        const data = await resp.json();
-                        const htmlContent = data.contents || (typeof data === 'string' ? data : '');
-                        if (htmlContent) {
+                        let htmlContent = "";
+                        if (proxyUrl.includes('allorigins')) {
+                            const data = await resp.json();
+                            htmlContent = data.contents || "";
+                        } else {
+                            htmlContent = await resp.text();
+                        }
+
+                        if (htmlContent && htmlContent.length > 100) {
                             const tmp = document.createElement('div');
                             tmp.innerHTML = htmlContent;
-                            // Remove scripts, styles, and other noise
-                            tmp.querySelectorAll('script, style, nav, footer, header').forEach(el => el.remove());
-                            content = (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 100000); 
-                            actualType = 'text';
-                            success = true;
-                            showToast("URL content fetched and cleaned!", "success");
-                            break;
+                            // Aggressive cleaning
+                            tmp.querySelectorAll('script, style, nav, footer, header, iframe, noscript, .ads, #sidebar').forEach(el => el.remove());
+                            content = (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 150000); 
+                            if (content.length > 50) {
+                                actualType = 'text';
+                                success = true;
+                                showToast("Academic content extracted!", "success");
+                                break;
+                            }
                         }
                     }
                 } catch (err) {
+                    lastErr = err.message;
                     console.warn(`Proxy failed:`, err);
                 }
             }
@@ -441,7 +470,7 @@ window.processIngest = async () => {
             if (!success) {
                 content = rawUrl;
                 actualType = 'url';
-                showToast("Stored URL as reference (could not fetch content).", "warning");
+                showToast("Stored URL as reference (Full extraction failed: " + lastErr + ")", "warning");
             }
         } else if (type === 'file') {
             const fileInput = document.getElementById('ingest-file');
@@ -451,8 +480,10 @@ window.processIngest = async () => {
             // Validate supported types
             const supported = file.type.startsWith('image/') || file.type === 'application/pdf' ||
                               file.type === 'video/mp4' || file.type === 'text/plain' ||
-                              file.type === 'text/csv' || file.type.includes('document');
-            if (!supported) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast(`Unsupported file type: ${file.type}`, "error"); }
+                              file.type === 'text/csv' || file.type.includes('document') || 
+                              file.name.endsWith('.docx') || file.name.endsWith('.doc');
+
+            if (!supported) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast(`Unsupported file type: ${file.type}. Please use PDF, Images, MP4, or TXT.`, "error"); }
             
             if (file.type === 'text/plain' || file.type === 'text/csv') {
                 content = await new Promise((resolve, reject) => {
@@ -466,7 +497,13 @@ window.processIngest = async () => {
             } else {
                 actualType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'pdf');
                 mimeType = file.type;
-                if (file.size > 2 * 1024 * 1024) isLargeMedia = true; // Lower threshold for better stability
+                if (file.type.includes('document') || file.name.endsWith('.docx')) {
+                    mimeType = 'application/pdf'; // Fake it for Gemini if it's a docx, though it might fail, we give it a shot or warn
+                    actualType = 'pdf';
+                    showToast("Note: Word docs are experimental. PDFs recommended.", "info");
+                }
+                
+                if (file.size > 5 * 1024 * 1024) isLargeMedia = true; 
                 content = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = () => resolve(reader.result.split(',')[1]);
@@ -483,22 +520,21 @@ window.processIngest = async () => {
         };
         AppState.documents.push(newDoc);
         
-        // Better persistence logic: try to save, if it fails due to QuotaExceeded, strip largest items
         try {
             saveState('documents', AppState.documents);
         } catch (quotaErr) {
             console.warn("LocalStorage Quota Exceeded, stripping large media...");
             const safeDocs = AppState.documents.map(doc => ({
                 ...doc,
-                items: doc.items.map(it => it.isLargeMedia ? { ...it, content: '[LARGE_MEDIA_SESSION_ONLY]' } : it)
+                items: doc.items.map(it => it.isLargeMedia ? { ...it, content: '[MEDIA_KEPT_IN_MEMORY_ONLY]' } : it)
             }));
             saveState('documents', safeDocs);
-            showToast("Storage full! Large files kept in session only.", "warning");
+            showToast("Local Storage full! Large media will be lost on refresh.", "warning");
         }
         
         document.getElementById('modal-container').classList.add('hidden');
         window.renderSourcesSidebar();
-        if(!isLargeMedia) showToast("Source added successfully!", "success");
+        if(!isLargeMedia) showToast("Source synchronized!", "success");
     } catch (e) {
         console.error('Ingest error:', e);
         showToast(`Error: ${e.message}`, "error");
@@ -914,6 +950,30 @@ const Views = {
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Dashboard</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Welcome back to your research workspace.</p>
+            
+            <!-- Quick Feature Access -->
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+                <div class="glass-panel" style="background:linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1)); border-color:var(--accent); cursor:pointer; padding: 1.5rem; display:flex; align-items:center; gap:1.5rem;" onclick="window.navigate('study-rooms')">
+                    <div style="width:50px; height:50px; border-radius:1rem; background:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.5rem; color:white;">
+                        <ion-icon name="people-outline"></ion-icon>
+                    </div>
+                    <div>
+                        <h3 style="margin:0; color:var(--text-main);">Group Study</h3>
+                        <p style="margin:0; font-size:0.8rem; color:var(--text-muted);">Collaborate in real-time with classmates.</p>
+                    </div>
+                </div>
+                <div class="glass-panel" style="background:rgba(255,255,255,0.02); cursor:pointer; padding: 1.5rem; display:flex; align-items:center; gap:1.5rem;" onclick="window.navigate('search-sources')">
+                    <div style="width:50px; height:50px; border-radius:1rem; background:rgba(255,255,255,0.1); display:flex; align-items:center; justify-content:center; font-size:1.5rem; color:var(--text-main);">
+                        <ion-icon name="search-outline"></ion-icon>
+                    </div>
+                    <div>
+                        <h3 style="margin:0; color:var(--text-main);">Find Sources</h3>
+                        <p style="margin:0; font-size:0.8rem; color:var(--text-muted);">Explore academic papers and articles.</p>
+                    </div>
+                </div>
+            </div>
+
+            <h3 style="font-size:1.25rem; margin-bottom:1.5rem;">Your Research Environments</h3>
             <div class="dashboard-grid">
                 ${AppState.rooms.map((r, i) => `
                     <div class="glass-panel stat-card ${AppState.currentRoomIndex === i ? 'active-source' : ''}" 
@@ -1197,7 +1257,7 @@ const Views = {
         const rooms = AppState.rooms || [];
         return `
         <div class="glass-panel">
-            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Study Rooms</h2>
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Group Study</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Collaborate in real-time or manage your private research environments.</p>
             
             <div class="dashboard-tabs" style="margin-bottom: 2rem;">
@@ -1667,7 +1727,15 @@ window.navigate = (route) => {
     if(activeNav) activeNav.classList.add('active');
     
     const pageTitle = document.getElementById('page-title');
-    if (pageTitle) pageTitle.textContent = route.charAt(0).toUpperCase() + route.slice(1);
+    if (pageTitle) {
+        const titleMap = {
+            'study-rooms': 'Group Study',
+            'search-sources': 'Academic Search',
+            'blur-study': 'Blur Study (Recall)',
+            'review-mistakes': 'Learning Diagnostics'
+        };
+        pageTitle.textContent = titleMap[route] || route.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    }
 
     if (Views[route]) {
         content.innerHTML = `<div class="view-section active">${Views[route]()}</div>`;
