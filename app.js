@@ -8,13 +8,13 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, q
 // ==========================================
 // Your web app's Firebase configuration
 const firebaseConfig = {
-    apiKey: "AIzaSyABoww644_-Z1D9uqH2Mdt7vC9kC6b_4zE",
-    authDomain: "lumina-9f61d.firebaseapp.com",
-    projectId: "lumina-9f61d",
-    storageBucket: "lumina-9f61d.firebasestorage.app",
-    messagingSenderId: "460396663674",
-    appId: "1:460396663674:web:e120212a33a6c0193c7cc3",
-    measurementId: "G-07VKYN007T"
+  apiKey: "AIzaSyDbOPhl6mdx_KDr5MsTjTXeRe0KkncTH7o",
+  authDomain: "lumina-cca28.firebaseapp.com",
+  projectId: "lumina-cca28",
+  storageBucket: "lumina-cca28.firebasestorage.app",
+  messagingSenderId: "603977778491",
+  appId: "1:603977778491:web:60a2680e70e246c509e31e",
+  measurementId: "G-1PEHNYJ1Z8"
 };
 
 let app, auth, db;
@@ -54,44 +54,69 @@ const AppState = {
     // Real-time Study Rooms State
     realtimeRoom: null, 
     user: null, // Logged in user info
-    isHost: false
+    isHost: false,
+    
+    // NOTEBOOKLM 2025-2026 EXTENSIONS
+    notebooks: [],
+    activeNotebookId: null,
+    userTier: 'free',
+    notebookSearchQuery: '',
+    showNotesTab: false,
+    showConfigPanel: false // Controls the per-notebook persona/config panel
 };
+
+// Expose globally for extensions
+window.AppState = AppState;
 
 
 let currentRoute = 'dashboard';
 
 /**
- * Saves state to LocalStorage.
+ * Saves state to IndexedDB (and fallback LocalStorage for small keys).
  */
-const saveState = (key, value) => {
+const saveState = async (key, value) => {
     AppState[key] = value;
     
     try {
-        if (['apiKey', 'settings', 'currentRoomIndex'].includes(key)) {
-            localStorage.setItem(`lumina_${key}`, JSON.stringify(value));
-            if (key === 'apiKey') updateApiStatus();
-            if (key === 'currentRoomIndex' && value > -1) {
-                AppState.activeSourceIndices = [];
-                location.reload(); 
-            }
-        } else if (['documents', 'quizzes', 'flashcards', 'chatHistory', 'pathways', 'sharedChat', 'presentations', 'infographics', 'wrongAnswers', 'overviewChat', 'overviews'].includes(key)) {
-            if (AppState.currentRoomIndex > -1) {
+        // Always save to IndexedDB (no quota limit)
+        if (window.idbKeyval) {
+            await idbKeyval.set(`lumina_${key}`, value);
+        }
+
+        // Secondary logic for notebook/room syncing
+        if (['documents', 'quizzes', 'flashcards', 'chatHistory', 'pathways', 'sharedChat', 'presentations', 'infographics', 'wrongAnswers', 'overviewChat', 'overviews', 'config'].includes(key)) {
+            if (AppState.activeNotebookId) {
+                const nb = AppState.notebooks.find(n => n.id === AppState.activeNotebookId);
+                if (nb) {
+                    if (key === 'documents') nb.sources = value;
+                    else nb[key] = value;
+                    if (window.idbKeyval) await idbKeyval.set('lumina_notebooks', AppState.notebooks);
+                    
+                    // Firestore Sync
+                    if (window.auth && window.auth.currentUser && window.db && !nb.isSharedReadonly) {
+                        try {
+                            const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+                            await setDoc(doc(window.db, `users/${window.auth.currentUser.uid}/notebooks`, nb.id), nb, { merge: true });
+                        } catch(e) { console.warn("Firestore sync skipped:", e.message); }
+                    }
+                }
+            } else if (AppState.currentRoomIndex > -1) {
                 const room = AppState.rooms[AppState.currentRoomIndex];
                 room[key] = value;
-                localStorage.setItem('lumina_rooms', JSON.stringify(AppState.rooms));
+                if (window.idbKeyval) await idbKeyval.set('lumina_rooms', AppState.rooms);
             }
-        } else if (key === 'rooms') {
-            localStorage.setItem('lumina_rooms', JSON.stringify(value));
         }
     } catch (error) {
         console.error("Save Error:", error);
     }
 };
 
+window.saveState = saveState;
+
 /**
  * Loads all data from LocalStorage.
  */
-const loadLocalData = () => {
+const loadLocalData = async () => {
     try {
         if (auth) {
             onAuthStateChanged(auth, (user) => {
@@ -107,12 +132,41 @@ const loadLocalData = () => {
             });
         }
         
-        AppState.apiKey = JSON.parse(localStorage.getItem('lumina_apiKey')) || '';
-        AppState.settings = JSON.parse(localStorage.getItem('lumina_settings')) || AppState.settings;
-        AppState.currentRoomIndex = JSON.parse(localStorage.getItem('lumina_currentRoomIndex')) ?? -1;
-        AppState.rooms = JSON.parse(localStorage.getItem('lumina_rooms')) || [];
+        if (window.idbKeyval) {
+            AppState.apiKey = await idbKeyval.get('lumina_apiKey') || '';
+            AppState.settings = await idbKeyval.get('lumina_settings') || AppState.settings;
+            AppState.searchConfig = await idbKeyval.get('lumina_searchConfig') || AppState.searchConfig;
+            AppState.currentRoomIndex = await idbKeyval.get('lumina_currentRoomIndex') ?? -1;
+            AppState.rooms = await idbKeyval.get('lumina_rooms') || [];
+            AppState.notebooks = await idbKeyval.get('lumina_notebooks') || [];
+            AppState.activeNotebookId = await idbKeyval.get('lumina_activeNotebookId') || null;
+            AppState.userTier = await idbKeyval.get('lumina_userTier') || 'free';
+        } else {
+            AppState.apiKey = JSON.parse(localStorage.getItem('lumina_apiKey')) || '';
+            AppState.settings = JSON.parse(localStorage.getItem('lumina_settings')) || AppState.settings;
+            AppState.searchConfig = JSON.parse(localStorage.getItem('lumina_searchConfig')) || AppState.searchConfig;
+            AppState.currentRoomIndex = JSON.parse(localStorage.getItem('lumina_currentRoomIndex')) ?? -1;
+            AppState.rooms = JSON.parse(localStorage.getItem('lumina_rooms')) || [];
+            AppState.notebooks = JSON.parse(localStorage.getItem('lumina_notebooks')) || [];
+            AppState.activeNotebookId = JSON.parse(localStorage.getItem('lumina_activeNotebookId')) || null;
+            AppState.userTier = JSON.parse(localStorage.getItem('lumina_userTier')) || 'free';
+        }
 
-        if (AppState.currentRoomIndex > -1 && AppState.rooms[AppState.currentRoomIndex]) {
+        if (AppState.activeNotebookId) {
+            const nb = AppState.notebooks.find(n => n.id === AppState.activeNotebookId);
+            if (nb) {
+                AppState.documents = nb.sources || [];
+                AppState.quizzes = nb.quizzes || [];
+                AppState.flashcards = nb.flashcards || [];
+                AppState.chatHistory = nb.chatHistory || [];
+                AppState.pathways = nb.pathways || [];
+                AppState.wrongAnswers = nb.wrongAnswers || [];
+                AppState.overviewChat = nb.overviewChat || [];
+                AppState.presentations = nb.presentations || [];
+                AppState.infographics = nb.infographics || [];
+                AppState.overviews = nb.overviews || [];
+            }
+        } else if (AppState.currentRoomIndex > -1 && AppState.rooms[AppState.currentRoomIndex]) {
             const r = AppState.rooms[AppState.currentRoomIndex];
             AppState.documents = r.documents || [];
             AppState.quizzes = r.quizzes || [];
@@ -206,6 +260,50 @@ const callGemini = async (prompt, systemInstruction = '', history = [], response
     
     // All models exhausted
     throw lastError || new Error('All models failed. Please check your API key in Settings.');
+};
+
+/**
+ * Image Generation Interaction Layer (Gemini Image API)
+ */
+const callGeminiImage = async (promptText) => {
+    const key = AppState.apiKey;
+    if (!key) throw new Error("API Key Missing. Please go to Settings and enter your Gemini API key.");
+    
+    // Using Nano Banana 2 (Gemini 3.1 Flash Image)
+    const model = 'gemini-3.1-flash-image-preview';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${key}`;
+    
+    const body = {
+        instances: [{ prompt: promptText }],
+        parameters: { sampleCount: 1 }
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error?.message || 'Image Generation API Error');
+        }
+
+        const data = await response.json();
+        if (data.predictions && data.predictions[0] && data.predictions[0].bytesBase64Encoded) {
+            return `data:image/jpeg;base64,${data.predictions[0].bytesBase64Encoded}`;
+        } else if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            // Fallback for models returning text payload
+            const part = data.candidates[0].content.parts[0];
+            if (part.inlineData) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+        }
+        throw new Error('No image returned from Nano Banana 2 model.');
+    } catch (err) {
+        throw err;
+    }
 };
 
 /**
@@ -307,7 +405,7 @@ const getActiveContextParts = () => {
     AppState.activeSourceIndices.forEach(idx => {
         const d = AppState.documents[idx];
         if (!d) return;
-        textContext += `SOURCE GROUP: ${d.title}\n---\n`;
+        textContext += `[Source Index: ${idx}] SOURCE GROUP: ${d.title}\n---\n`;
         (d.items || []).forEach(it => {
             if (it.type === 'text' || it.type === 'url') {
                 textContext += `ITEM TITLE: ${it.title}\nTYPE: ${it.type}\nCONTENT: ${it.content}\n`;
@@ -330,24 +428,67 @@ const getActiveContextParts = () => {
 window.renderSourcesSidebar = () => {
     const list = document.getElementById('global-sources-list');
     if (!list) return;
-    list.innerHTML = AppState.documents.length === 0 ? '<p style="padding: 1rem; color:var(--text-muted); text-align:center">No sources yet.</p>' : 
-        AppState.documents.map((d, i) => `
-            <div class="source-item ${AppState.activeSourceIndices.includes(i) ? 'active' : ''}" onclick="window.toggleSource(${i})">
-                <ion-icon name="${d.type === 'web' ? 'globe-outline' : 'document-text-outline'}"></ion-icon>
-                <div class="source-info">
-                    <div class="source-name">${d.title}</div>
-                    <div class="source-meta">${(d.items || []).length} chunks</div>
-                </div>
-                <button class="source-delete" onclick="event.stopPropagation(); window.deleteSource(${i})"><ion-icon name="trash-outline"></ion-icon></button>
+    
+    // Update count badge
+    const badge = document.getElementById('source-count');
+    if (badge) badge.textContent = AppState.documents.length;
+    
+    if (AppState.documents.length === 0) {
+        list.innerHTML = `
+            <div class="sources-empty-state">
+                <ion-icon name="document-text-outline"></ion-icon>
+                <p>Add sources like PDFs, text files, or URLs to build your notebook's knowledge base.</p>
             </div>
-        `).join('');
+        `;
+        return;
+    }
+    
+    list.innerHTML = `<div class="sources-list-v2">` + AppState.documents.map((d, i) => `
+        <div class="source-card-v2 ${AppState.activeSourceIndices.includes(i) ? 'active' : ''}" onclick="window.toggleSource(${i})">
+            <div class="source-card-icon" style="background: ${AppState.activeSourceIndices.includes(i) ? 'var(--accent)' : 'rgba(255,255,255,0.1)'}; color: ${AppState.activeSourceIndices.includes(i) ? 'white' : 'inherit'};">
+                <ion-icon name="${d.type === 'web' || d.type === 'url' ? 'globe-outline' : (d.type === 'pdf' ? 'document-text-outline' : (d.type === 'video' ? 'videocam-outline' : 'document-outline'))}"></ion-icon>
+            </div>
+            <div class="source-card-info">
+                <div class="source-card-name">${d.title}</div>
+                <div class="source-card-meta">${d.type.toUpperCase()} &bull; ${new Date(d.items[0]?.date || Date.now()).toLocaleDateString()}</div>
+            </div>
+            <div class="source-card-actions">
+                <button class="panel-icon-btn" onclick="event.stopPropagation(); window.deleteSource(${i})" style="color:var(--error); width:24px; height:24px;"><ion-icon name="trash-outline"></ion-icon></button>
+            </div>
+        </div>
+    `).join('') + `</div>`;
 };
 
 window.toggleSource = (idx) => {
-    const i = AppState.activeSourceIndices.indexOf(idx);
-    if (i > -1) AppState.activeSourceIndices.splice(i, 1);
-    else AppState.activeSourceIndices.push(idx);
+    const pos = AppState.activeSourceIndices.indexOf(idx);
+    if (pos === -1) {
+        if(AppState.activeSourceIndices.length >= 10) return showToast("Max 10 active sources allowed.", "warning");
+        AppState.activeSourceIndices.push(idx);
+    } else {
+        AppState.activeSourceIndices.splice(pos, 1);
+    }
     window.renderSourcesSidebar();
+};
+
+window.highlightSource = (idx) => {
+    idx = parseInt(idx, 10);
+    if (!AppState.activeSourceIndices.includes(idx)) {
+        window.toggleSource(idx);
+    }
+    // Visually highlight it in the sidebar
+    const list = document.getElementById('global-sources-list');
+    if (!list) return;
+    const cards = list.querySelectorAll('.source-card-v2');
+    if (cards[idx]) {
+        cards[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        cards[idx].style.transition = 'all 0.3s';
+        cards[idx].style.boxShadow = '0 0 0 2px var(--accent)';
+        cards[idx].style.transform = 'scale(1.02)';
+        setTimeout(() => {
+            cards[idx].style.boxShadow = '';
+            cards[idx].style.transform = '';
+        }, 1500);
+    }
 };
 
 window.deleteSource = (idx) => {
@@ -365,9 +506,11 @@ window.openIngestModal = () => {
         <div class="glass-panel" style="width: 100%;">
             <h2 style="margin-bottom: 2rem">Add Research Source</h2>
             
-            <div class="ingest-tabs">
+            <div class="ingest-tabs" style="grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));">
                 <button class="ingest-tab active" onclick="window.switchIngestTab('text')"><ion-icon name="text-outline"></ion-icon> Text</button>
-                <button class="ingest-tab" onclick="window.switchIngestTab('url')"><ion-icon name="link-outline"></ion-icon> URL</button>
+                <button class="ingest-tab" onclick="window.switchIngestTab('url')"><ion-icon name="link-outline"></ion-icon> Link</button>
+                <button class="ingest-tab" onclick="window.switchIngestTab('youtube')"><ion-icon name="logo-youtube"></ion-icon> YouTube</button>
+                <button class="ingest-tab" onclick="window.switchIngestTab('search')"><ion-icon name="search-outline"></ion-icon> Search</button>
                 <button class="ingest-tab" onclick="window.switchIngestTab('file')"><ion-icon name="document-attach-outline"></ion-icon> File</button>
             </div>
             
@@ -380,11 +523,21 @@ window.openIngestModal = () => {
             <div id="ingest-content-url" class="ingest-content" style="display:none">
                 <div class="form-group"><label>Website URL</label><input type="url" id="ingest-url" class="form-control" placeholder="https://..."></div>
             </div>
+
+            <div id="ingest-content-youtube" class="ingest-content" style="display:none">
+                <div class="form-group"><label>YouTube Video URL</label><input type="url" id="ingest-youtube" class="form-control" placeholder="https://youtube.com/watch?v=..."></div>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem">AI will extract transcript and key insights.</p>
+            </div>
+
+            <div id="ingest-content-search" class="ingest-content" style="display:none">
+                <div class="form-group"><label>Web Search Query</label><input type="text" id="ingest-search" class="form-control" placeholder="e.g. quantum physics latest research"></div>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem">Top research results will be added as sources.</p>
+            </div>
             
             <div id="ingest-content-file" class="ingest-content" style="display:none">
                 <div class="form-group"><label>Upload File</label>
                 <input type="file" id="ingest-file" class="form-control" accept="image/*,application/pdf,video/mp4,text/plain,text/csv">
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem">Supported: PDF, Images, MP4, TXT, CSV (max 20MB)</p>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem"><strong>Gemini Vision Native:</strong> PDFs and Images are parsed perfectly without local OCR. (Max 50MB)</p>
                 </div>
             </div>
 
@@ -472,6 +625,48 @@ window.processIngest = async () => {
                 actualType = 'url';
                 showToast("Stored URL as reference (Full extraction failed: " + lastErr + ")", "warning");
             }
+        } else if (type === 'youtube') {
+            const rawUrl = document.getElementById('ingest-youtube').value.trim();
+            if (!rawUrl) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("YouTube URL required", "error"); }
+            
+            // Extract Video ID
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = rawUrl.match(regExp);
+            const videoId = (match && match[2].length === 11) ? match[2] : null;
+            
+            if (videoId) {
+                actualType = 'youtube';
+                content = videoId;
+                showToast("YouTube source added!", "success");
+            } else {
+                actualType = 'url';
+                content = rawUrl;
+                showToast("Invalid YouTube URL, stored as link.", "warning");
+            }
+        } else if (type === 'search') {
+            const query = document.getElementById('ingest-search').value.trim();
+            if (!query) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("Search query required", "error"); }
+            
+            showToast("Searching the web for research papers...", "info");
+            const results = await window.searchSources(query);
+            if (results && results.length > 0) {
+                // Ingest top 3 results automatically
+                for (let i = 0; i < Math.min(3, results.length); i++) {
+                    const res = results[i];
+                    AppState.documents.push({
+                        title: res.title,
+                        type: 'web',
+                        items: [{ title: res.title, type: 'url', content: res.link, date: new Date().toISOString() }]
+                    });
+                }
+                saveState('documents', AppState.documents);
+                window.renderSourcesSidebar();
+                document.getElementById('modal-container').classList.add('hidden');
+                return showToast(`Ingested ${Math.min(3, results.length)} sources from web search!`, "success");
+            } else {
+                if(btn){btn.disabled=false;btn.innerHTML='Add Source';}
+                return showToast("No research results found for this query.", "warning");
+            }
         } else if (type === 'file') {
             const fileInput = document.getElementById('ingest-file');
             if (!fileInput || !fileInput.files.length) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("Please select a file", "error"); }
@@ -520,16 +715,17 @@ window.processIngest = async () => {
         };
         AppState.documents.push(newDoc);
         
+        // Auto-Generate Title & Thumbnail for first source
+        if (AppState.documents.length === 1 && AppState.activeNotebookId) {
+            if (window.autoGenerateNotebookTitle) window.autoGenerateNotebookTitle(AppState.activeNotebookId, content);
+            if (window.generateNotebookThumbnail) window.generateNotebookThumbnail(AppState.activeNotebookId, actualType);
+        }
+
         try {
             saveState('documents', AppState.documents);
         } catch (quotaErr) {
-            console.warn("LocalStorage Quota Exceeded, stripping large media...");
-            const safeDocs = AppState.documents.map(doc => ({
-                ...doc,
-                items: doc.items.map(it => it.isLargeMedia ? { ...it, content: '[MEDIA_KEPT_IN_MEMORY_ONLY]' } : it)
-            }));
-            saveState('documents', safeDocs);
-            showToast("Local Storage full! Large media will be lost on refresh.", "warning");
+            console.warn("IndexedDB or Cache error:", quotaErr);
+            saveState('documents', AppState.documents);
         }
         
         document.getElementById('modal-container').classList.add('hidden');
@@ -990,19 +1186,111 @@ const Views = {
                 </div>
             </div>
         </div>`,
-    notebook: () => `
-        <div style="display:flex; flex-direction:column; height: 100%; max-width: 1000px; margin: 0 auto; width: 100%;">
-            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 2rem">Research Hub</h2>
+    notebook: () => {
+        const nb = AppState.activeNotebookId ? AppState.notebooks.find(n => n.id === AppState.activeNotebookId) : null;
+        const notes = nb?.notes || [];
+        const config = nb?.config || { persona: 'academic', tone: 'neutral', length: 'medium', language: 'english' };
+        
+        return `
+        <div style="display:flex; flex-direction:column; height: 100%; max-width: 1000px; margin: 0 auto; width: 100%; position:relative;">
+            
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border-color);">
+                <div style="display:flex; align-items:center; gap: 1rem;">
+                    <button class="panel-icon-btn" onclick="window.navigate('notebooks')" style="background:rgba(255,255,255,0.05);"><ion-icon name="arrow-back"></ion-icon></button>
+                    <h2 style="font-size: 1.75rem; font-weight: 800; margin: 0;">${nb ? nb.title : 'Research Hub'}</h2>
+                </div>
+                <div style="display:flex; gap:0.75rem; align-items:center;">
+                    <div class="workspace-tabs" style="display:flex; gap:0.5rem; background:rgba(0,0,0,0.2); padding:0.25rem; border-radius:0.5rem;">
+                        <button class="btn btn-sm ${!AppState.showNotesTab ? 'btn-primary' : 'btn-secondary'}" onclick="window.toggleWorkspaceTab('chat')" style="border:none;">Chat</button>
+                        <button class="btn btn-sm ${AppState.showNotesTab ? 'btn-primary' : 'btn-secondary'}" onclick="window.toggleWorkspaceTab('notes')" style="border:none;">Saved Notes (${notes.length})</button>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="window.toggleConfigPanel()" style="display:flex; align-items:center; gap:0.5rem;">
+                        <ion-icon name="settings-outline"></ion-icon> Configure
+                    </button>
+                </div>
+            </div>
+
+            ${AppState.showConfigPanel ? `
+            <div class="glass-panel config-overlay" style="position:absolute; top:80px; right:0; z-index:100; width:350px; background:rgba(15,15,20,0.98); backdrop-filter:blur(20px); border:1px solid var(--accent); box-shadow:0 10px 40px rgba(0,0,0,0.5); padding:1.5rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h3 style="margin:0; font-size:1.1rem; color:var(--accent);">Notebook Settings</h3>
+                    <button class="panel-icon-btn" onclick="window.toggleConfigPanel()"><ion-icon name="close"></ion-icon></button>
+                </div>
+                
+                <div style="display:flex; flex-direction:column; gap:1.25rem;">
+                    <div>
+                        <label style="display:block; font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">AI Persona</label>
+                        <select onchange="window.updateNotebookConfig('persona', this.value)" class="form-control" style="background:rgba(255,255,255,0.05);">
+                            <option value="academic" ${config.persona === 'academic' ? 'selected' : ''}>Academic Analyst</option>
+                            <option value="tutor" ${config.persona === 'tutor' ? 'selected' : ''}>Socratic Tutor</option>
+                            <option value="creative" ${config.persona === 'creative' ? 'selected' : ''}>Creative Assistant</option>
+                            <option value="legal" ${config.persona === 'legal' ? 'selected' : ''}>Legal Reviewer</option>
+                            <option value="concise" ${config.persona === 'concise' ? 'selected' : ''}>Concise Executive</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">Response Tone</label>
+                        <select onchange="window.updateNotebookConfig('tone', this.value)" class="form-control" style="background:rgba(255,255,255,0.05);">
+                            <option value="neutral" ${config.tone === 'neutral' ? 'selected' : ''}>Neutral & Objective</option>
+                            <option value="formal" ${config.tone === 'formal' ? 'selected' : ''}>Professional & Formal</option>
+                            <option value="casual" ${config.tone === 'casual' ? 'selected' : ''}>Casual & Conversational</option>
+                            <option value="humorous" ${config.tone === 'humorous' ? 'selected' : ''}>Witty & Humorous</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">Output Language</label>
+                        <select onchange="window.updateNotebookConfig('language', this.value)" class="form-control" style="background:rgba(255,255,255,0.05);">
+                            <option value="english" ${config.language === 'english' ? 'selected' : ''}>English</option>
+                            <option value="spanish" ${config.language === 'spanish' ? 'selected' : ''}>Spanish (Español)</option>
+                            <option value="french" ${config.language === 'french' ? 'selected' : ''}>French (Français)</option>
+                            <option value="german" ${config.language === 'german' ? 'selected' : ''}>German (Deutsch)</option>
+                            <option value="chinese" ${config.language === 'chinese' ? 'selected' : ''}>Chinese (中文)</option>
+                            <option value="japanese" ${config.language === 'japanese' ? 'selected' : ''}>Japanese (日本語)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+
+            ${!AppState.showNotesTab ? `
             <div class="chat-container" style="flex: 1;">
                 <div class="chat-history" id="chat-history-box">
-                    ${AppState.chatHistory.map(msg => `<div class="chat-bubble ${msg.role}">${marked.parse(msg.content)}</div>`).join('')}
+                    ${AppState.chatHistory.map((msg, idx) => `
+                        <div class="chat-bubble ${msg.role}">
+                            ${marked.parse(msg.content).replace(/\[(\d+)\]/g, '<span class="citation-badge" onclick="window.highlightSource($1)" title="View Source $1">[$1]</span>')}
+                            ${msg.role === 'ai' ? `
+                            <div style="display:flex; justify-content:flex-end; margin-top:0.5rem;">
+                                <button class="btn btn-secondary btn-sm" onclick="window.saveChatToNotes(${idx})" style="padding:0.25rem 0.5rem; font-size:0.7rem;"><ion-icon name="bookmark-outline"></ion-icon> Save Note</button>
+                            </div>` : ''}
+                        </div>
+                    `).join('')}
                 </div>
                 <div class="chat-input-area">
                     <input type="text" id="chat-input" placeholder="Query your research context..." autocomplete="off">
                     <button class="btn btn-primary" id="btn-send-chat"><ion-icon name="send"></ion-icon></button>
                 </div>
             </div>
-        </div>`,
+            ` : `
+            <div class="notes-container" style="flex: 1; overflow-y:auto; padding: 1rem 0;">
+                <div class="notes-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
+                    ${notes.length === 0 ? '<div style="grid-column: 1/-1; text-align:center; padding: 3rem; color:var(--text-muted);">No notes saved yet. Generate Studio elements or save Chat answers.</div>' : 
+                    notes.map((n, idx) => `
+                        <div class="glass-panel" style="padding: 1.5rem; display:flex; flex-direction:column; max-height:400px; overflow-y:auto;">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 0.5rem;">
+                                <h4 style="margin:0; font-weight:700; color:var(--accent);">${n.title || 'Note'}</h4>
+                                <button class="panel-icon-btn" onclick="window.deleteNote(${idx})" style="color:var(--error);"><ion-icon name="trash-outline"></ion-icon></button>
+                            </div>
+                            <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:1rem;">${new Date(n.date).toLocaleString()}</div>
+                            <div style="font-size:0.85rem; line-height:1.6; overflow-y:auto;">
+                                ${n.html || marked.parse(n.content || '')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            `}
+        </div>`;
+    },
     studio: () => {
         const presentations = AppState.presentations || [];
         return `
@@ -1042,7 +1330,10 @@ const Views = {
                             <h4 style="margin:0">${p.slides[0].title}</h4>
                             <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${p.slides.length} slides &bull; ${p.date ? new Date(p.date).toLocaleDateString() : 'Recent'}</p>
                         </div>
-                        <button class="btn btn-secondary btn-sm" onclick="window.viewPresentation(${i})">View Presentation</button>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button class="btn btn-secondary btn-sm" onclick="window.viewPresentation(${i})">View Slides</button>
+                            <button class="btn btn-primary btn-sm" onclick="window.playCinematicVideo(${i})" style="display:flex; align-items:center; gap:0.4rem;"><ion-icon name="play-circle-outline"></ion-icon> Play</button>
+                        </div>
                     </div>
                 `).join('')}
             </div>
@@ -1173,9 +1464,50 @@ const Views = {
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Executive Overviews</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate comprehensive summaries, infographics, and data tables from your documents.</p>
             
-            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
                 ${customFocusInput('input-overview-focus')}
                 ${complexitySelector('overview-complexity')}
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Language</label>
+                    <select id="overview-language" class="form-control">
+                        <option value="English">English</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div id="media-options-panel" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Visual Style (Images)</label>
+                    <select id="overview-style" class="form-control">
+                        <option value="Auto-select">Auto-select</option>
+                        <option value="Sketch note">Sketch note</option>
+                        <option value="Kawaii">Kawaii</option>
+                        <option value="Professional">Professional</option>
+                        <option value="Scientific">Scientific</option>
+                        <option value="Anime">Anime</option>
+                        <option value="Clay">Clay</option>
+                        <option value="Editorial">Editorial</option>
+                        <option value="Instructional">Instructional</option>
+                        <option value="Bento grid">Bento grid</option>
+                        <option value="Bricks">Bricks</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Orientation</label>
+                    <select id="overview-orientation" class="form-control">
+                        <option value="Landscape">Landscape</option>
+                        <option value="Portrait">Portrait</option>
+                        <option value="Square">Square</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Level of Detail</label>
+                    <select id="overview-detail" class="form-control">
+                        <option value="Concise">Concise</option>
+                        <option value="Standard" selected>Standard</option>
+                        <option value="Detailed">Detailed</option>
+                    </select>
+                </div>
             </div>
 
             <div class="studio-generator-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
@@ -1190,9 +1522,9 @@ const Views = {
                     <p>Structured tabular data extraction.</p>
                 </div>
                 <div class="studio-gen-card glass-panel" onclick="window.generateOverview('infographic')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
-                    <ion-icon name="pie-chart-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
-                    <h3>Neural Map (Mermaid)</h3>
-                    <p>Mermaid diagram representation.</p>
+                    <ion-icon name="image-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
+                    <h3>AI Infographic</h3>
+                    <p>Image generation via Nano Banana 2.</p>
                 </div>
                 <div class="studio-gen-card glass-panel" onclick="window.generateOverview('knowledgemap')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
                     <ion-icon name="git-branch-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
@@ -1601,8 +1933,80 @@ const Views = {
                 </div>
             </div>` : ''}
         </div>`;
-    }
+    },
+    studio: () => `
+        <div class="glass-panel">
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Creative Studio</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Transform your research into presentations, maps, and reports.</p>
+            
+            <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
+                <div class="glass-panel studio-card" onclick="window.generateStudio('presentation')" style="cursor:pointer; padding:2rem; background:rgba(59,130,246,0.05); border:1px solid rgba(59,130,246,0.2);">
+                    <ion-icon name="easel-outline" style="font-size:2.5rem; color:var(--accent); margin-bottom:1rem;"></ion-icon>
+                    <h3>Slide Deck</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">Academic presentation with speaker notes.</p>
+                </div>
+                <div class="glass-panel studio-card" onclick="window.generateStudio('knowledgemap')" style="cursor:pointer; padding:2rem; background:rgba(139,92,246,0.05); border:1px solid rgba(139,92,246,0.2);">
+                    <ion-icon name="git-branch-outline" style="font-size:2.5rem; color:#8b5cf6; margin-bottom:1rem;"></ion-icon>
+                    <h3>Knowledge Map</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">Interactive force-directed relationship graph.</p>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+                    ${customFocusInput('input-studio-focus')}
+                    ${countSelector('input-studio-count', 5)}
+                </div>
+            </div>
+
+            <div id="studio-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+            <div id="studio-workspace" class="glass-panel" style="display:none; padding:2rem; background:rgba(0,0,0,0.2);"></div>
+        </div>`,
+    settings: () => `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Settings & Configuration</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Manage your AI models and Search API credentials.</p>
+            
+            <div class="glass-panel" style="background:rgba(255,255,255,0.02); padding:2rem; margin-bottom:1.5rem;">
+                <h3 style="margin-bottom:1.5rem; font-size:1.2rem;">Google Gemini AI</h3>
+                <div class="form-group">
+                    <label>Gemini API Key</label>
+                    <div style="display:flex; gap:0.5rem;">
+                        <input type="password" id="input-api-key" class="form-control" value="${AppState.apiKey}" placeholder="AIzaSy...">
+                        <button class="btn btn-secondary btn-sm" onclick="this.previousElementSibling.type = this.previousElementSibling.type === 'password' ? 'text' : 'password'">
+                            <ion-icon name="eye-outline"></ion-icon>
+                        </button>
+                    </div>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem;">Get yours at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent)">Google AI Studio</a></p>
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Primary AI Model</label>
+                    <select id="input-study-mode" class="form-control">
+                        <option value="gemini-2.5-flash" ${AppState.settings.model === 'gemini-2.5-flash' ? 'selected' : ''}>Gemini 2.5 Flash (Fastest)</option>
+                        <option value="gemini-1.5-pro" ${AppState.settings.model === 'gemini-1.5-pro' ? 'selected' : ''}>Gemini 1.5 Pro (Deepest)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="glass-panel" style="background:rgba(255,255,255,0.02); padding:2rem; margin-bottom:2rem;">
+                <h3 style="margin-bottom:1.5rem; font-size:1.2rem;">Web Search Integration</h3>
+                <div class="form-group">
+                    <label>Google Search API Key</label>
+                    <input type="password" id="input-search-api-key" class="form-control" value="${AppState.searchConfig.apiKey}" placeholder="AIzaSy...">
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Search Engine ID (CX)</label>
+                    <input type="text" id="input-search-cx" class="form-control" value="${AppState.searchConfig.cx}" placeholder="e.g. 0123456789abcdefg">
+                </div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem;">Configure these at <a href="https://developers.google.com/custom-search/v1/overview" target="_blank" style="color:var(--accent)">Google Programmable Search Engine</a></p>
+            </div>
+
+            <button class="btn btn-primary" id="btn-save-settings" style="width:100%; padding:1rem; font-weight:700; font-size:1rem;">Save All Configuration</button>
+        </div>`
+    },
 };
+
+window.Views = Views;
 
 
 // ==========================================
@@ -1620,6 +2024,11 @@ window.navigate = (route) => {
     const activeNav = document.querySelector(`.nav-links li[data-route="${route}"]`);
     if(activeNav) activeNav.classList.add('active');
     
+    // Also update left icon nav for 3-panel layout
+    document.querySelectorAll('.icon-nav-btn').forEach(el => el.classList.remove('active'));
+    const activeIconNav = document.querySelector(`.icon-nav-btn[data-route="${route}"]`);
+    if(activeIconNav) activeIconNav.classList.add('active');
+    
     const pageTitle = document.getElementById('page-title');
     if (pageTitle) {
         const titleMap = {
@@ -1633,11 +2042,12 @@ window.navigate = (route) => {
 
     if (Views[route]) {
         content.innerHTML = `<div class="view-section active">${Views[route]()}</div>`;
-        bindViewEvents(route);
+        if (window.bindViewEvents) window.bindViewEvents(route);
+        if (route === 'discover') window.loadDiscoverGallery();
     }
 };
 
-const bindViewEvents = (route) => {
+window.bindViewEvents = (route) => {
     if (route === 'settings') {
         const sBtn = document.getElementById('btn-save-settings');
         if (sBtn) {
@@ -1649,7 +2059,7 @@ const bindViewEvents = (route) => {
                 AppState.apiKey = newKey;
                 AppState.searchConfig.apiKey = newSearchKey;
                 AppState.searchConfig.cx = newSearchCx;
-                AppState.settings.studyMode = document.getElementById('input-study-mode').value;
+                AppState.settings.model = document.getElementById('input-study-mode').value;
                 
                 saveState('apiKey', AppState.apiKey);
                 saveState('searchConfig', AppState.searchConfig);
@@ -1705,6 +2115,51 @@ const bindViewEvents = (route) => {
     if (route === 'notebook') {
         const input = document.getElementById('chat-input');
         const btn = document.getElementById('btn-send-chat');
+        const container = document.querySelector('.chat-container');
+
+        if (container) {
+            container.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                container.style.border = "2px dashed var(--accent)";
+                container.style.borderRadius = "1rem";
+            });
+            container.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                container.style.border = "none";
+            });
+            container.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                container.style.border = "none";
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const file = e.dataTransfer.files[0];
+                    if (file.type.startsWith('image/')) {
+                        const reader = new FileReader();
+                        reader.onload = async (event) => {
+                            const base64 = event.target.result.split(',')[1];
+                            AppState.chatHistory.push({ role: 'user', content: `[Attached Image: ${file.name}]` });
+                            saveState('chatHistory', AppState.chatHistory);
+                            window.navigate('notebook');
+                            
+                            try {
+                                showToast("Analyzing attached image...");
+                                const parts = getActiveContextParts();
+                                parts.push({ inlineData: { mimeType: file.type, data: base64 } });
+                                parts.push({ text: "Please analyze the attached image in the context of my research." });
+                                const systemInstruction = "You are an expert study assistant in a Notebook application. Base your answers strictly on the provided SOURCE GROUP contexts and any attached images.";
+                                const res = await callGemini(parts, systemInstruction, AppState.chatHistory);
+                                AppState.chatHistory.push({ role: 'ai', content: res });
+                                saveState('chatHistory', AppState.chatHistory);
+                                window.navigate('notebook');
+                            } catch (err) { showToast(err.message, 'error'); }
+                        };
+                        reader.readAsDataURL(file);
+                    } else {
+                        showToast("Currently, only images can be drag-dropped directly into chat. Use 'Add Source' for PDFs.", "warning");
+                    }
+                }
+            });
+        }
+
         if (btn && input) {
             btn.onclick = async () => {
                 const msg = input.value.trim(); if (!msg) return;
@@ -1715,7 +2170,8 @@ const bindViewEvents = (route) => {
                 try {
                     const parts = getActiveContextParts();
                     parts.push({ text: msg });
-                    const res = await callGemini(parts, "Study assistant.", AppState.chatHistory);
+                    const systemInstruction = "You are an expert study assistant in a Notebook application. Base your answers strictly on the provided SOURCE GROUP contexts. When using information from a source, YOU MUST cite it inline using the exact format [1], [2], corresponding to the [Source Index: X] provided in the context. Do not invent external information. Use markdown formatting to make your answer easy to read.";
+                    const res = await callGemini(parts, systemInstruction, AppState.chatHistory);
                     AppState.chatHistory.push({ role: 'ai', content: res });
                     saveState('chatHistory', AppState.chatHistory);
                     window.navigate('notebook');
@@ -1787,12 +2243,28 @@ const bindViewEvents = (route) => {
                 
                 let prompt = "";
                 let systemInstruction = "You are an expert academic analyst.";
+                let isImageGeneration = false;
                 
                 if (type === 'summary') {
                     prompt = `${complexityInstruction}${focusInstruction}Write a highly detailed, extremely comprehensive executive summary of the provided context. Use markdown headers, bullet points, and bold text for emphasis. Do NOT output JSON. Output pure Markdown.`;
                 } else if (type === 'infographic') {
-                    prompt = `${complexityInstruction}${focusInstruction}Create a Mermaid flowchart (graph TD) that visualizes the main workflow, relationships, or timeline described in the text. Output raw syntax ONLY. Do NOT use markdown code blocks.`;
-                    systemInstruction = "Mermaid expert. Output raw syntax ONLY.";
+                    isImageGeneration = true;
+                    // Gather UI options
+                    const visualStyle = document.getElementById('overview-style') ? document.getElementById('overview-style').value : 'Auto-select';
+                    const orientation = document.getElementById('overview-orientation') ? document.getElementById('overview-orientation').value : 'Landscape';
+                    const detailLevel = document.getElementById('overview-detail') ? document.getElementById('overview-detail').value : 'Standard';
+                    
+                    // Extract text context from parts
+                    const sourceText = parts.map(p => p.text || '').join('\n').substring(0, 5000);
+                    
+                    prompt = `Create a high-quality educational infographic image based on the following text content.
+                    Visual Style: ${visualStyle}
+                    Orientation: ${orientation}
+                    Level of Detail: ${detailLevel}
+                    Focus Instruction: ${focus || 'None'}
+                    
+                    Text Content:
+                    ${sourceText}`;
                 } else if (type === 'datatable') {
                     prompt = `${complexityInstruction}${focusInstruction}Extract all quantitative data, lists of items, comparisons, or structured information from the text and present it as a Markdown Table. If there is no explicit data, synthesize a comparison table of the key concepts. Output pure Markdown.`;
                 } else if (type === 'knowledgemap') {
@@ -1800,15 +2272,19 @@ const bindViewEvents = (route) => {
                     systemInstruction = "You are a knowledge graph expert. Return ONLY raw valid JSON.";
                 }
                 
-                parts.push({ text: prompt });
-                const res = await callGemini(parts, systemInstruction, null, type === 'knowledgemap' ? 'application/json' : null);
+                let res;
+                if (isImageGeneration) {
+                    res = await callGeminiImage(prompt);
+                } else {
+                    parts.push({ text: prompt });
+                    res = await callGemini(parts, systemInstruction, null, type === 'knowledgemap' ? 'application/json' : null);
+                }
                 
                 if (type === 'knowledgemap') {
                     const graph = parseJsonSafe(res);
                     window.renderKnowledgeMap(workspace, graph);
                 } else if (type === 'infographic') {
-                    workspace.innerHTML = `<div class="mermaid">${res}</div>`;
-                    if (window.mermaid) mermaid.init(undefined, workspace.querySelectorAll('.mermaid'));
+                    workspace.innerHTML = `<img src="${res}" alt="Generated Infographic" style="width: 100%; border-radius: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">`;
                 } else {
                     workspace.innerHTML = `<div class="markdown-body" style="padding:1.5rem;">${marked.parse(res)}</div>`;
                 }
@@ -2108,8 +2584,7 @@ window.viewOverview = (idx) => {
     workspace.innerHTML = '';
     
     if (overview.type === 'infographic') {
-        workspace.innerHTML = `<div class="mermaid">${overview.content}</div>`;
-        if (window.mermaid) mermaid.init(undefined, workspace.querySelectorAll('.mermaid'));
+        workspace.innerHTML = `<img src="${overview.content}" alt="Generated Infographic" style="width: 100%; border-radius: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">`;
     } else if (overview.type === 'datatable') {
         workspace.innerHTML = `
             <div style="margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center;">
@@ -2609,7 +3084,7 @@ window.searchSources = async (query, filters = 'all') => {
     }
 };
 
-window.saveSource = (source) => {
+window.saveSource = (source, extractedText = null) => {
     if (!AppState.sourceLibrary) AppState.sourceLibrary = [];
     AppState.sourceLibrary.push({
         ...source,
@@ -2617,7 +3092,22 @@ window.saveSource = (source) => {
         savedAt: new Date().toISOString()
     });
     saveState('sourceLibrary', AppState.sourceLibrary);
-    showToast("Source saved to library!", "success");
+    
+    const newDoc = {
+        title: source.title,
+        type: 'web',
+        items: [{
+            title: source.title,
+            type: extractedText ? 'text' : 'url',
+            content: extractedText || source.snippet + "\n" + source.link,
+            date: new Date().toISOString()
+        }]
+    };
+    AppState.documents.push(newDoc);
+    saveState('documents', AppState.documents);
+    window.renderSourcesSidebar();
+    
+    showToast("Source saved and added to active context!", "success");
 };
 
 window.summarizeSearchSource = async (source) => {
@@ -2637,7 +3127,7 @@ window.summarizeSearchSource = async (source) => {
         window.showModal(`Summary: ${source.title}`, `
             <div class="markdown-body" style="font-size:0.9rem; padding:1.5rem;">${marked.parse(res)}</div>
             <div style="padding:1.5rem; border-top:1px solid var(--border-color);">
-                <button class="btn btn-primary" onclick="window.saveSource(${JSON.stringify(source).replace(/"/g, '&quot;')})">Save to Library</button>
+                <button class="btn btn-primary" onclick='window.saveSource(${JSON.stringify(source).replace(/'/g, "&apos;")}, ${JSON.stringify(text).replace(/'/g, "&apos;")})'>Save to Library</button>
             </div>
         `);
     } catch (e) {
@@ -2711,9 +3201,66 @@ window.executeSearch = async () => {
 // INITIALIZATION
 // ==========================================
 
-document.addEventListener('DOMContentLoaded', () => {
-    loadLocalData();
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadLocalData();
     updateApiStatus();
+    
+    // Check for shared notebook in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareId = urlParams.get('share');
+    if (shareId) {
+        window.showToast("Loading shared notebook...", "info");
+        // Wait for Firebase to initialize fully
+        setTimeout(async () => {
+            if (!window.db) return window.showToast("Firebase not initialized", "error");
+            try {
+                const { doc, getDoc, onSnapshot } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+                const shareRef = doc(window.db, "shares", shareId);
+                const shareSnap = await getDoc(shareRef);
+                
+                if (shareSnap.exists()) {
+                    const shareData = shareSnap.data();
+                    const nbId = shareData.notebookId;
+                    const ownerId = shareData.ownerId;
+                    const role = shareData.role; // 'viewer' or 'editor'
+                    
+                    // Listen to the notebook document
+                    onSnapshot(doc(window.db, `users/${ownerId}/notebooks`, nbId), (nbSnap) => {
+                        if (nbSnap.exists()) {
+                            let nbData = nbSnap.data();
+                            nbData.isShared = true;
+                            nbData.isSharedReadonly = role === 'viewer';
+                            nbData.shareOwnerId = ownerId;
+                            
+                            const existingIdx = AppState.notebooks.findIndex(n => n.id === nbId);
+                            if (existingIdx > -1) {
+                                AppState.notebooks[existingIdx] = nbData;
+                            } else {
+                                AppState.notebooks.push(nbData);
+                            }
+                            
+                            if (AppState.activeNotebookId === nbId) {
+                                // Reload current view
+                                window.navigate(window.currentRoute);
+                            }
+                        }
+                    });
+                    
+                    AppState.activeNotebookId = nbId;
+                    window.navigate('notebook');
+                    window.showToast(`Joined shared notebook as ${role}`, "success");
+                    
+                    // Clean URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else {
+                    window.showToast("Share link invalid or expired.", "error");
+                }
+            } catch (e) {
+                console.error("Share load error:", e);
+                window.showToast("Failed to load shared notebook.", "error");
+            }
+        }, 1500); // Give auth a moment to settle
+    }
     
     document.querySelectorAll('.nav-links li').forEach(li => {
         li.classList.remove('active');
@@ -2728,7 +3275,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     });
     
-    window.navigate('dashboard');
+    if (!shareId) window.navigate('dashboard');
 });
 
 // ==========================================
