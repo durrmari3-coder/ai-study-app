@@ -2003,7 +2003,6 @@ const Views = {
 
             <button class="btn btn-primary" id="btn-save-settings" style="width:100%; padding:1rem; font-weight:700; font-size:1rem;">Save All Configuration</button>
         </div>`
-    },
 };
 
 window.Views = Views;
