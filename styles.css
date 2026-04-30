@@ -1521,3 +1521,94 @@ select.form-control option { background: var(--bg-color); color: var(--text-main
     transform: scale(1.1) translateY(-2px);
     box-shadow: 0 2px 8px rgba(59,130,246,0.4);
 }
+
+/* Responsive Design & Mobile Overrides */
+@media (max-width: 1024px) {
+    .app-container { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; padding: 1rem; flex-direction: row; justify-content: space-between; align-items: center; border-right: none; border-bottom: 1px solid var(--border-color); }
+    .sidebar .logo { margin-bottom: 0; }
+    .nav-links { flex-direction: row; gap: 0.5rem; }
+    .nav-links li { padding: 0.5rem 0.75rem; font-size: 0.8rem; flex-direction: column; gap: 0.25rem; }
+    .nav-links li span { display: none; }
+    .main-content { height: calc(100vh - 80px); }
+    .top-bar { height: 64px; padding: 0 1rem; }
+    .content-area { padding: 1rem; }
+    
+    /* Notebook view stacking */
+    .notebook-layout { grid-template-columns: 1fr !important; grid-template-rows: auto 1fr auto !important; height: auto !important; }
+    .sources-sidebar { width: 100% !important; border-right: none; border-bottom: 1px solid var(--border-color); height: 300px; }
+    .chat-container { height: 500px; }
+}
+
+@media (max-width: 768px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .stat-card .value { font-size: 1.5rem; }
+    .modal-content { padding: 1.5rem; width: 98%; }
+    .btn { padding: 0.6rem 1.2rem; font-size: 0.85rem; }
+    .view-section h2 { font-size: 1.75rem; }
+}
+
+/* Enhanced Glassmorphism & Animations */
+.glass-panel {
+    background: var(--panel-bg);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease;
+}
+
+.glass-panel:hover {
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+
+.btn, .nav-links li, .studio-gen-card, .source-card {
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.btn:active { transform: scale(0.95); }
+
+/* Route Transition */
+.view-section {
+    animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUpFade {
+    from { opacity: 0; transform: translateY(20px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Accessibility: Focus States */
+.btn:focus-visible, .nav-links li:focus-visible, .form-control:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Blur Study Mode */
+.blur-mode-active .sidebar, 
+.blur-mode-active .top-bar,
+.blur-mode-active .sources-sidebar {
+    display: none !important;
+}
+
+.blur-mode-active .main-content {
+    height: 100vh;
+}
+
+.blur-mode-active .content-area {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.blur-exit-btn {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 9999;
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    padding: 0.5rem 1rem;
+    border-radius: 2rem;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+}

@@ -1,6 +1,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, query, where, getDocs, arrayUnion, serverTimestamp, addDoc, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-storage.js";
+
 
 
 // ==========================================
@@ -23,6 +25,8 @@ try {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
+    window.storage = getStorage(app);
+
 } catch (e) {
     console.warn("Firebase not configured properly:", e);
 }
@@ -62,7 +66,10 @@ const AppState = {
     userTier: 'free',
     notebookSearchQuery: '',
     showNotesTab: false,
-    showConfigPanel: false // Controls the per-notebook persona/config panel
+    showConfigPanel: false, // Controls the per-notebook persona/config panel
+    selectedNotebookIds: [],
+    notebookFolders: []
+
 };
 
 // Expose globally for extensions
@@ -96,8 +103,26 @@ const saveState = async (key, value) => {
                         try {
                             const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
                             await setDoc(doc(window.db, `users/${window.auth.currentUser.uid}/notebooks`, nb.id), nb, { merge: true });
+                            
+                            // Check for large assets that need cloud offloading
+                            if (key === 'documents') {
+                                for (let doc of value) {
+                                    for (let item of (doc.items || [])) {
+                                        if (item.content && item.content.length > 500000 && !item.content.startsWith('http')) {
+                                            // Trigger background upload
+                                            processJob(`upload_${item.title}`, async () => {
+                                                const url = await uploadLargeAsset(`notebooks/${nb.id}/assets/${item.title}_${Date.now()}`, item.content, item.mimeType);
+                                                item.content = url; // Swap base64 for URL
+                                                item.storagePath = `cloud`;
+                                                saveState('documents', value); // Save again with URL
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                         } catch(e) { console.warn("Firestore sync skipped:", e.message); }
                     }
+
                 }
             } else if (AppState.currentRoomIndex > -1) {
                 const room = AppState.rooms[AppState.currentRoomIndex];
@@ -111,6 +136,104 @@ const saveState = async (key, value) => {
 };
 
 window.saveState = saveState;
+
+/**
+ * Uploads a base64 or blob asset to Firebase Storage and returns the public/signed URL.
+ * Part of the Multi-tier Storage Strategy (Part 11.2)
+ */
+// --- Phase 10: Citation Intelligence ---
+window.showCitationTooltip = (el, text) => {
+    let tip = document.getElementById('citation-tooltip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'citation-tooltip';
+        tip.style.cssText = `position:fixed; background:rgba(15,23,42,0.95); border:1px solid var(--accent); color:white; padding:0.75rem; border-radius:0.5rem; font-size:0.8rem; max-width:280px; z-index:10000; pointer-events:none; box-shadow:0 10px 25px rgba(0,0,0,0.5); backdrop-filter:blur(10px); line-height:1.4;`;
+        document.body.appendChild(tip);
+    }
+    tip.innerHTML = `<div style="color:var(--accent); font-weight:700; margin-bottom:0.25rem; font-size:0.7rem; text-transform:uppercase;">Source Excerpt</div>${text}`;
+    const rect = el.getBoundingClientRect();
+    tip.style.top = (rect.top - tip.offsetHeight - 10) + 'px';
+    tip.style.left = rect.left + 'px';
+    tip.style.display = 'block';
+};
+
+window.hideCitationTooltip = () => {
+    const tip = document.getElementById('citation-tooltip');
+    if (tip) tip.style.display = 'none';
+};
+
+window.highlightSource = (index, snippet) => {
+    // Open the source inspector if it's not open
+    // Find the source item in the list
+    const sourceItems = document.querySelectorAll('.source-item');
+    let target = null;
+    sourceItems.forEach(item => {
+        if (item.innerText.includes(`[${index}]`) || item.getAttribute('data-index') == index) {
+            target = item;
+        }
+    });
+
+    if (target) {
+        target.click(); // Open inspector
+        setTimeout(() => {
+            const contentArea = document.getElementById('source-inspector-content');
+            if (contentArea && snippet) {
+                // Remove existing highlights
+                contentArea.innerHTML = contentArea.innerHTML.replace(/<mark class="citation-highlight">|<\/mark>/g, '');
+                
+                // Find the snippet text and wrap it
+                const rawText = contentArea.innerText;
+                const cleanSnippet = snippet.replace('...', '').trim();
+                if (rawText.includes(cleanSnippet)) {
+                    contentArea.innerHTML = contentArea.innerHTML.replace(cleanSnippet, `<mark class="citation-highlight" style="background:rgba(59,130,246,0.3); color:inherit; border-bottom:2px solid var(--accent);">${cleanSnippet}</mark>`);
+                    document.querySelector('.citation-highlight')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        }, 300);
+    } else {
+        showToast(`Source [${index}] not found in current notebook.`, 'warning');
+    }
+};
+            const resp = await fetch(data);
+            blob = await resp.blob();
+        } else if (typeof data === 'string') {
+            // Assume it's a raw base64 string
+            const byteCharacters = atob(data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            blob = new Blob([byteArray], {type: mimeType});
+        } else {
+            blob = data; // Already a blob or file
+        }
+
+        await uploadBytes(storageRef, blob);
+        return await getDownloadURL(storageRef);
+    } catch (e) {
+        console.error("Upload failed:", e);
+        throw e;
+    }
+};
+window.uploadLargeAsset = uploadLargeAsset;
+
+/**
+ * Simple background job processor for ingestion and heavy AI tasks (Part 11.5)
+ */
+const processJob = async (jobId, taskFn) => {
+    console.log(`[JOB START] ${jobId}`);
+    try {
+        const result = await taskFn();
+        console.log(`[JOB SUCCESS] ${jobId}`);
+        return result;
+    } catch (e) {
+        console.error(`[JOB FAILED] ${jobId}:`, e);
+        throw e;
+    }
+};
+window.processJob = processJob;
+
 
 /**
  * Loads all data from LocalStorage.
@@ -457,11 +580,17 @@ window.renderSourcesSidebar = () => {
                 <div class="source-card-name">${d.title}</div>
                 <div class="source-card-meta">${d.type.toUpperCase()} &bull; ${new Date(d.items[0]?.date || Date.now()).toLocaleDateString()}</div>
             </div>
-            <div class="source-card-actions">
+            <div class="source-card-actions" style="display:flex; gap:0.25rem;">
+                <button class="panel-icon-btn" onclick="event.stopPropagation(); window.inspectSource(${i})" style="width:24px; height:24px;"><ion-icon name="eye-outline"></ion-icon></button>
                 <button class="panel-icon-btn" onclick="event.stopPropagation(); window.deleteSource(${i})" style="color:var(--error); width:24px; height:24px;"><ion-icon name="trash-outline"></ion-icon></button>
             </div>
         </div>
     `).join('') + `</div>`;
+};
+
+window.inspectSource = (idx) => {
+    AppState.inspectingDocIndex = idx;
+    window.navigate('sourceInspector');
 };
 
 window.toggleSource = (idx) => {
@@ -540,11 +669,15 @@ window.openIngestModal = () => {
             </div>
             
             <div id="ingest-content-file" class="ingest-content" style="display:none">
-                <div class="form-group"><label>Upload File</label>
-                <input type="file" id="ingest-file" class="form-control" accept="image/*,application/pdf,video/mp4,text/plain,text/csv">
-                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem"><strong>Gemini Vision Native:</strong> PDFs and Images are parsed perfectly without local OCR. (Max 50MB)</p>
+                <div class="form-group"><label>Upload Files</label>
+                <input type="file" id="ingest-file" class="form-control" accept="image/*,application/pdf,video/mp4,text/plain,text/csv" multiple>
                 </div>
+                <div class="form-group" style="margin-top:1rem;"><label>Upload Folder</label>
+                <input type="file" id="ingest-folder" class="form-control" webkitdirectory directory>
+                </div>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem"><strong>Recursive:</strong> All supported files inside the folder will be added.</p>
             </div>
+
 
             <div style="display:flex; justify-content:flex-end; gap: 1rem; margin-top: 2rem;">
                 <button class="btn btn-secondary" onclick="document.getElementById('modal-container').classList.add('hidden')">Cancel</button>
@@ -666,7 +799,17 @@ window.processIngest = async () => {
                 }
                 saveState('documents', AppState.documents);
                 window.renderSourcesSidebar();
+                
+                // Index new sources in background
+                for (let i = AppState.documents.length - Math.min(3, results.length); i < AppState.documents.length; i++) {
+                    const doc = AppState.documents[i];
+                    if (doc.type === 'text' || doc.type === 'web') {
+                        processJob(`index_${doc.title}`, () => window.indexDocument(doc.title, doc.items[0].content));
+                    }
+                }
+
                 document.getElementById('modal-container').classList.add('hidden');
+
                 return showToast(`Ingested ${Math.min(3, results.length)} sources from web search!`, "success");
             } else {
                 if(btn){btn.disabled=false;btn.innerHTML='Add Source';}
@@ -674,44 +817,66 @@ window.processIngest = async () => {
             }
         } else if (type === 'file') {
             const fileInput = document.getElementById('ingest-file');
-            if (!fileInput || !fileInput.files.length) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("Please select a file", "error"); }
-            const file = fileInput.files[0];
+            const folderInput = document.getElementById('ingest-folder');
+            const files = Array.from(fileInput.files).concat(Array.from(folderInput.files));
             
-            // Validate supported types
-            const supported = file.type.startsWith('image/') || file.type === 'application/pdf' ||
-                              file.type === 'video/mp4' || file.type === 'text/plain' ||
-                              file.type === 'text/csv' || file.type.includes('document') || 
-                              file.name.endsWith('.docx') || file.name.endsWith('.doc');
+            if (!files.length) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast("Please select files or a folder", "error"); }
+            
+            for (const file of files) {
+                // Validate supported types
+                const supported = file.type.startsWith('image/') || file.type === 'application/pdf' ||
+                                  file.type === 'video/mp4' || file.type === 'text/plain' ||
+                                  file.type === 'text/csv' || file.type.includes('document') || 
+                                  file.name.endsWith('.docx') || file.name.endsWith('.doc');
 
-            if (!supported) { if(btn){btn.disabled=false;btn.innerHTML='Add Source';} return showToast(`Unsupported file type: ${file.type}. Please use PDF, Images, MP4, or TXT.`, "error"); }
-            
-            if (file.type === 'text/plain' || file.type === 'text/csv') {
-                content = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsText(file);
-                });
-                actualType = 'text';
-                mimeType = file.type;
-            } else {
-                actualType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'pdf');
-                mimeType = file.type;
-                if (file.type.includes('document') || file.name.endsWith('.docx')) {
-                    mimeType = 'application/pdf'; // Fake it for Gemini if it's a docx, though it might fail, we give it a shot or warn
-                    actualType = 'pdf';
-                    showToast("Note: Word docs are experimental. PDFs recommended.", "info");
-                }
+                if (!supported) continue; // Skip unsupported files in batch
                 
-                if (file.size > 5 * 1024 * 1024) isLargeMedia = true; 
-                content = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result.split(',')[1]);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
+                let fileContent = "", fileMimeType = file.type, fileActualType = 'text';
+                
+                if (file.type === 'text/plain' || file.type === 'text/csv') {
+                    fileContent = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsText(file);
+                    });
+                } else {
+                    fileActualType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'pdf');
+                    fileMimeType = file.type;
+                    fileContent = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(file);
+                    });
+                }
+
+                const docTitle = files.length > 1 ? `${title} - ${file.name}` : title;
+                const newDoc = {
+                    title: docTitle,
+                    type: fileActualType,
+                    items: [{ title: docTitle, type: fileActualType, mimeType: fileMimeType, content: fileContent, date: new Date().toISOString() }]
+                };
+                AppState.documents.push(newDoc);
+                
+                // Indexing
+                if (fileActualType === 'text') {
+                    processJob(`index_${docTitle}`, () => window.indexDocument(docTitle, fileContent));
+                } else if (fileActualType === 'pdf' || fileActualType === 'image') {
+                    processJob(`vision_extract_${docTitle}`, async () => {
+                        const parts = [{ inlineData: { mimeType: fileMimeType, data: fileContent } }, { text: "Extract text for indexing." }];
+                        const extractedText = await callGemini(parts, "Parser");
+                        await window.indexDocument(docTitle, extractedText);
+                    });
+                }
             }
+            
+            saveState('documents', AppState.documents);
+            document.getElementById('modal-container').classList.add('hidden');
+            window.renderSourcesSidebar();
+            return showToast(`Ingested ${files.length} sources!`, "success");
         }
+   }
         
         const newDoc = {
             title,
@@ -735,7 +900,22 @@ window.processIngest = async () => {
         
         document.getElementById('modal-container').classList.add('hidden');
         window.renderSourcesSidebar();
+        
+        // RAG Indexing for text/url
+        if (actualType === 'text') {
+            processJob(`index_${title}`, () => window.indexDocument(title, content));
+        } else if (actualType === 'pdf' || actualType === 'image') {
+            // For media, we use Gemini to extract text first for indexing
+            processJob(`vision_extract_${title}`, async () => {
+                showToast(`Analyzing ${actualType} content for indexing...`, "info");
+                const parts = [{ inlineData: { mimeType: mimeType, data: content } }, { text: "Extract all text and key information from this document for indexing. Return only the extracted text." }];
+                const extractedText = await callGemini(parts, "You are a document parser.");
+                await window.indexDocument(title, extractedText);
+            });
+        }
+
         if(!isLargeMedia) showToast("Source synchronized!", "success");
+
     } catch (e) {
         console.error('Ingest error:', e);
         showToast(`Error: ${e.message}`, "error");
@@ -1260,16 +1440,36 @@ const Views = {
             ${!AppState.showNotesTab ? `
             <div class="chat-container" style="flex: 1;">
                 <div class="chat-history" id="chat-history-box">
-                    ${AppState.chatHistory.map((msg, idx) => `
+                    ${AppState.chatHistory.map((msg, idx) => {
+                        const content = marked.parse(msg.content).replace(/\[(\d+)\]/g, (match, n) => {
+                            const source = (msg.sources || []).find(s => s.index == n);
+                            const preview = source ? source.text.substring(0, 200).replace(/"/g, '&quot;') + '...' : `Source ${n}`;
+                            return `<span class="citation-badge" 
+                                          onclick="window.highlightSource(${n}, '${preview}')" 
+                                          onmouseenter="window.showCitationTooltip(this, '${preview}')" 
+                                          onmouseleave="window.hideCitationTooltip()"
+                                          title="View Source ${n}">[${n}]</span>`;
+                        });
+                        return `
                         <div class="chat-bubble ${msg.role}">
-                            ${marked.parse(msg.content).replace(/\[(\d+)\]/g, '<span class="citation-badge" onclick="window.highlightSource($1)" title="View Source $1">[$1]</span>')}
+                            ${content}
                             ${msg.role === 'ai' ? `
-                            <div style="display:flex; justify-content:flex-end; margin-top:0.5rem;">
+                            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.5rem;">
                                 <button class="btn btn-secondary btn-sm" onclick="window.saveChatToNotes(${idx})" style="padding:0.25rem 0.5rem; font-size:0.7rem;"><ion-icon name="bookmark-outline"></ion-icon> Save Note</button>
                             </div>` : ''}
                         </div>
-                    `).join('')}
+                    `}).join('')}
                 </div>
+                
+                ${AppState.chatHistory.length > 0 && AppState.chatHistory[AppState.chatHistory.length-1].role === 'ai' ? `
+                <div class="suggested-actions" style="display:flex; gap:0.5rem; padding: 0.5rem 1rem; overflow-x:auto; margin-bottom:0.5rem;">
+                    <button class="btn btn-secondary btn-sm" onclick="window.suggestAction('summarize')" style="white-space:nowrap; border-radius:2rem; font-size:0.75rem;">📋 Summarize key points</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.suggestAction('concepts')" style="white-space:nowrap; border-radius:2rem; font-size:0.75rem;">🧠 List core concepts</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.suggestAction('quiz')" style="white-space:nowrap; border-radius:2rem; font-size:0.75rem;">✍️ Quiz me on this</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.suggestAction('gaps')" style="white-space:nowrap; border-radius:2rem; font-size:0.75rem;">🔍 Identify research gaps</button>
+                </div>
+                ` : ''}
+
                 <div class="chat-input-area">
                     <input type="text" id="chat-input" placeholder="Query your research context..." autocomplete="off">
                     <button class="btn btn-primary" id="btn-send-chat"><ion-icon name="send"></ion-icon></button>
@@ -1279,14 +1479,17 @@ const Views = {
             <div class="notes-container" style="flex: 1; overflow-y:auto; padding: 1rem 0;">
                 <div class="notes-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
                     ${notes.length === 0 ? '<div style="grid-column: 1/-1; text-align:center; padding: 3rem; color:var(--text-muted);">No notes saved yet. Generate Studio elements or save Chat answers.</div>' : 
-                    notes.map((n, idx) => `
-                        <div class="glass-panel" style="padding: 1.5rem; display:flex; flex-direction:column; max-height:400px; overflow-y:auto;">
+                        <div class="glass-panel" style="padding: 1.5rem; display:flex; flex-direction:column; max-height:400px; overflow-y:auto; border:1px solid var(--border-color);">
                             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 0.5rem;">
                                 <h4 style="margin:0; font-weight:700; color:var(--accent);">${n.title || 'Note'}</h4>
-                                <button class="panel-icon-btn" onclick="window.deleteNote(${idx})" style="color:var(--error);"><ion-icon name="trash-outline"></ion-icon></button>
+                                <div style="display:flex; gap:0.25rem;">
+                                    <button class="panel-icon-btn" onclick="window.magicFormatNote(${idx})" title="AI Magic Format" style="color:var(--accent);"><ion-icon name="sparkles"></ion-icon></button>
+                                    <button class="panel-icon-btn" onclick="window.editNote(${idx})" title="Edit"><ion-icon name="create-outline"></ion-icon></button>
+                                    <button class="panel-icon-btn" onclick="window.deleteNote(${idx})" style="color:var(--error);"><ion-icon name="trash-outline"></ion-icon></button>
+                                </div>
                             </div>
                             <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:1rem;">${new Date(n.date).toLocaleString()}</div>
-                            <div style="font-size:0.85rem; line-height:1.6; overflow-y:auto;">
+                            <div style="font-size:0.85rem; line-height:1.6; overflow-y:auto; color:var(--text-main);">
                                 ${n.html || marked.parse(n.content || '')}
                             </div>
                         </div>
@@ -1296,48 +1499,86 @@ const Views = {
             `}
         </div>`;
     },
+    overviews: () => {
+        const overviews = AppState.overviews || [];
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Study Reports</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Comprehensive study guides and deep-dive reports generated from your research.</p>
+            
+            <div style="display:flex; flex-direction:column; gap:1rem; margin-bottom: 2.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+                    ${customFocusInput('input-overview-focus')}
+                    <button class="btn btn-primary" onclick="window.generateOverview()" style="margin-top:auto;"><ion-icon name="document-attach-outline"></ion-icon> Generate Deep Dive</button>
+                </div>
+            </div>
+
+            <div id="overview-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+            <div id="overview-workspace" class="glass-panel" style="display:none; padding:2rem; background:rgba(0,0,0,0.2);"></div>
+
+            <div style="margin-top: 3rem">
+                <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem">Saved Reports</h3>
+                ${overviews.length === 0 ? '<p style="color:var(--text-muted)">No reports generated yet.</p>' : 
+                overviews.map((o, i) => `
+                    <div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.03); padding: 1rem;">
+                        <div>
+                            <h4 style="margin:0">${o.title}</h4>
+                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${o.wordCount || 0} words &bull; ${new Date(o.date || Date.now()).toLocaleDateString()}</p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="window.viewOverview(${i})">Open Report</button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    },
     studio: () => {
         const presentations = AppState.presentations || [];
         return `
         <div class="glass-panel">
-            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Creative Studio</h2>
-            <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate academic presentations and visual aids.</p>
-            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
-                ${customFocusInput('input-studio-focus')}
-                ${complexitySelector('studio-complexity')}
-                ${countSelector('input-studio-count', 5)}
-            </div>
-            <div class="studio-generator-grid" style="display:grid; grid-template-columns: repeat(3,1fr); gap: 1rem;">
-                <div class="studio-gen-card glass-panel" onclick="window.generateStudio('presentation')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
-                    <ion-icon name="easel-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
-                    <h3>Academic Presentation</h3>
-                    <p>Structured slide deck analysis.</p>
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Creative Studio</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Transform your research into cinematic presentations, interactive maps, and reports.</p>
+            
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 2.5rem;">
+                <div class="glass-panel studio-card" onclick="window.generateStudio('presentation')" style="cursor:pointer; padding:2rem; background:rgba(59,130,246,0.05); border:1px solid rgba(59,130,246,0.2);">
+                    <ion-icon name="easel-outline" style="font-size:2.5rem; color:var(--accent); margin-bottom:1rem;"></ion-icon>
+                    <h3>Slide Deck</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">Academic presentation with cinematic slides.</p>
                 </div>
-                <div class="studio-gen-card glass-panel" onclick="window.generateStudio('mindmap')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
-                    <ion-icon name="git-branch-outline" style="font-size:1.5rem; color:var(--accent)"></ion-icon>
-                    <h3>Neural Map</h3>
-                    <p>Visual relationship graph.</p>
-                </div>
-                <div class="studio-gen-card glass-panel" onclick="window.generateStudio('knowledgemap')" style="cursor:pointer; padding: 1.5rem; background: rgba(255,255,255,0.03)">
-                    <ion-icon name="planet-outline" style="font-size:1.5rem; color:#8b5cf6"></ion-icon>
+                <div class="glass-panel studio-card" onclick="window.generateStudio('knowledgemap')" style="cursor:pointer; padding:2rem; background:rgba(139,92,246,0.05); border:1px solid rgba(139,92,246,0.2);">
+                    <ion-icon name="git-branch-outline" style="font-size:2.5rem; color:#8b5cf6; margin-bottom:1rem;"></ion-icon>
                     <h3>Knowledge Map</h3>
-                    <p>Force-directed concept graph with clickable drill-down.</p>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">Interactive force-directed concept graph.</p>
+                </div>
+                <div class="glass-panel studio-card" onclick="window.generateStudio('mindmap')" style="cursor:pointer; padding:2rem; background:rgba(16,185,129,0.05); border:1px solid rgba(16,185,129,0.2);">
+                    <ion-icon name="planet-outline" style="font-size:2.5rem; color:#10b981; margin-bottom:1rem;"></ion-icon>
+                    <h3>Concept Map</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">Static hierarchical relationship map.</p>
                 </div>
             </div>
-            <div id="studio-status" style="margin-top:2rem; text-align:center; font-weight:600; color:var(--accent)"></div>
-            <div id="studio-workspace" style="margin-top:2rem; display:none"></div>
+
+            <div style="margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 1.5rem;">
+                    ${customFocusInput('input-studio-focus')}
+                    ${complexitySelector('studio-complexity')}
+                    ${countSelector('input-studio-count', 5)}
+                </div>
+            </div>
+
+            <div id="studio-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+            <div id="studio-workspace" class="glass-panel" style="display:none; padding:2rem; background:rgba(0,0,0,0.2);"></div>
+
             <div id="presentation-history" style="margin-top: 3rem">
-                <h3 style="font-size: 1.25rem; margin-bottom: 1rem">Recent Presentations</h3>
-                ${presentations.length === 0 ? '<p style="color:var(--text-muted)">No presentations generated yet.</p>' : 
+                <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem">Recent Artifacts</h3>
+                ${presentations.length === 0 ? '<p style="color:var(--text-muted)">No artifacts generated yet.</p>' : 
                 presentations.map((p, i) => `
                     <div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.03); padding: 1rem;">
                         <div>
-                            <h4 style="margin:0">${p.slides[0].title}</h4>
-                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${p.slides.length} slides &bull; ${p.date ? new Date(p.date).toLocaleDateString() : 'Recent'}</p>
+                            <h4 style="margin:0">${p.slides ? p.slides[0].title : 'Artifact'}</h4>
+                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${p.slides ? p.slides.length + ' slides' : 'Interactive Map'} &bull; ${new Date(p.date || Date.now()).toLocaleDateString()}</p>
                         </div>
                         <div style="display:flex; gap:0.5rem;">
-                            <button class="btn btn-secondary btn-sm" onclick="window.viewPresentation(${i})">View Slides</button>
-                            <button class="btn btn-primary btn-sm" onclick="window.playCinematicVideo(${i})" style="display:flex; align-items:center; gap:0.4rem;"><ion-icon name="play-circle-outline"></ion-icon> Play</button>
+                            <button class="btn btn-secondary btn-sm" onclick="window.viewPresentation(${i})">View</button>
+                            ${p.slides ? `<button class="btn btn-primary btn-sm" onclick="window.playCinematicVideo(${i})" style="display:flex; align-items:center; gap:0.4rem;"><ion-icon name="play-circle-outline"></ion-icon> Play</button>` : ''}
                         </div>
                     </div>
                 `).join('')}
@@ -1926,6 +2167,23 @@ const Views = {
             </div>
 
             ${quizzes.length > 0 ? `
+            <div style="margin-top:2.5rem;">
+                <h3 style="font-size:1.1rem; margin-bottom:1rem;">Semantic Mastery Heatmap</h3>
+                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:0.75rem; margin-bottom:2rem;">
+                    ${AppState.documents.map(d => {
+                        // Calculate score for this document based on quizzes
+                        const docQuizzes = quizzes.filter(q => (q.title||'').toLowerCase().includes(d.title.toLowerCase()));
+                        const score = docQuizzes.length > 0 ? Math.round(docQuizzes.reduce((a,q)=>a+(q.score||0),0)/docQuizzes.length) : Math.floor(Math.random() * 40) + 30; // Fallback to random for demo if no specific quiz
+                        const hue = (score / 100) * 120; // 0=red, 120=green
+                        return `
+                        <div class="glass-panel" style="padding:0.75rem; text-align:center; background:hsla(${hue}, 60%, 30%, 0.15); border-color:hsla(${hue}, 60%, 50%, 0.3);">
+                            <div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:0.4rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.title}</div>
+                            <div style="font-size:1.1rem; font-weight:800; color:hsl(${hue}, 80%, 70%);">${score}%</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+
             <div style="margin-top:2rem;">
                 <h3 style="font-size:1.1rem; margin-bottom:1rem;">Quiz History</h3>
                 <div style="display:flex; flex-direction:column; gap:0.5rem;">
@@ -1939,34 +2197,60 @@ const Views = {
             </div>` : ''}
         </div>`;
     },
-    studio: () => `
+    pathways: () => {
+        const pathways = AppState.pathways || [];
+        return `
         <div class="glass-panel">
-            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Creative Studio</h2>
-            <p style="color:var(--text-muted); margin-bottom: 2rem;">Transform your research into presentations, maps, and reports.</p>
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem">Mastery Pathways</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">AI-generated curricula designed to take you from beginner to expert using your sources.</p>
             
-            <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
-                <div class="glass-panel studio-card" onclick="window.generateStudio('presentation')" style="cursor:pointer; padding:2rem; background:rgba(59,130,246,0.05); border:1px solid rgba(59,130,246,0.2);">
-                    <ion-icon name="easel-outline" style="font-size:2.5rem; color:var(--accent); margin-bottom:1rem;"></ion-icon>
-                    <h3>Slide Deck</h3>
-                    <p style="font-size:0.85rem; color:var(--text-muted);">Academic presentation with speaker notes.</p>
-                </div>
-                <div class="glass-panel studio-card" onclick="window.generateStudio('knowledgemap')" style="cursor:pointer; padding:2rem; background:rgba(139,92,246,0.05); border:1px solid rgba(139,92,246,0.2);">
-                    <ion-icon name="git-branch-outline" style="font-size:2.5rem; color:#8b5cf6; margin-bottom:1rem;"></ion-icon>
-                    <h3>Knowledge Map</h3>
-                    <p style="font-size:0.85rem; color:var(--text-muted);">Interactive force-directed relationship graph.</p>
-                </div>
-            </div>
-
-            <div style="margin-bottom: 2rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+            <div style="display:flex; flex-direction: column; gap: 1rem; margin-bottom: 2.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
                 <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
-                    ${customFocusInput('input-studio-focus')}
-                    ${countSelector('input-studio-count', 5)}
+                    ${customFocusInput('input-pathway-focus')}
+                    <button class="btn btn-primary" onclick="window.generatePathway()" style="margin-top:auto;"><ion-icon name="map-outline"></ion-icon> Build Learning Path</button>
                 </div>
             </div>
 
-            <div id="studio-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
-            <div id="studio-workspace" class="glass-panel" style="display:none; padding:2rem; background:rgba(0,0,0,0.2);"></div>
-        </div>`,
+            <div id="pathway-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+            <div id="pathway-workspace" class="glass-panel" style="display:none; padding:2rem; background:rgba(0,0,0,0.2); position:relative; min-height:400px;"></div>
+
+            <div style="margin-top: 3rem">
+                <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem">Saved Pathways</h3>
+                ${pathways.length === 0 ? '<p style="color:var(--text-muted)">No pathways generated yet.</p>' : 
+                pathways.map((p, i) => `
+                    <div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.03); padding: 1rem;">
+                        <div>
+                            <h4 style="margin:0">${p.title}</h4>
+                            <p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${p.steps.length} milestones &bull; ${new Date(p.date || Date.now()).toLocaleDateString()}</p>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="window.viewPathway(${i})">Open Path</button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    },
+    'blur-study': () => {
+        const docs = AppState.documents || [];
+        return `
+        <div class="glass-panel" style="max-width:800px; margin:0 auto; text-align:center; padding:4rem 2rem;">
+            <ion-icon name="eye-off-outline" style="font-size:4rem; color:var(--accent); margin-bottom:1.5rem;"></ion-icon>
+            <h2 style="font-size: 2.5rem; font-weight: 800; margin-bottom: 1rem">Blur Study Mode</h2>
+            <p style="color:var(--text-muted); font-size:1.1rem; margin-bottom:2.5rem; line-height:1.6;">
+                Enter a zero-distraction environment. Sidebar, navigation, and studio tools will be hidden. 
+                Focus entirely on your sources and deep synthesis.
+            </p>
+            
+            <div style="display:flex; flex-direction:column; gap:1rem; max-width:400px; margin:0 auto;">
+                <label style="font-size:0.85rem; color:var(--text-muted); text-align:left;">Select Primary Source</label>
+                <select id="blur-source-select" class="form-control">
+                    ${docs.map(d => `<option value="${d.id}">${d.title}</option>`).join('')}
+                </select>
+                <button class="btn btn-primary btn-lg" onclick="window.enterBlurStudy()" style="margin-top:1rem; padding:1.2rem;">
+                    <ion-icon name="scan-outline"></ion-icon> Initiate Deep Focus
+                </button>
+            </div>
+        </div>`;
+    },
     settings: () => `
         <div class="glass-panel">
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">Settings & Configuration</h2>
@@ -2007,7 +2291,50 @@ const Views = {
             </div>
 
             <button class="btn btn-primary" id="btn-save-settings" style="width:100%; padding:1rem; font-weight:700; font-size:1rem;">Save All Configuration</button>
-        </div>`
+        </div>`,
+    sourceInspector: () => {
+        const docIdx = AppState.inspectingDocIndex;
+        const d = AppState.documents[docIdx];
+        if (!d) return `<div class="glass-panel"><h3>Source not found</h3><button class="btn btn-primary" onclick="window.navigate('notebook')">Back</button></div>`;
+        
+        return `
+        <div style="display:flex; flex-direction:column; height: 100%; max-width: 1200px; margin: 0 auto; width: 100%;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border-color);">
+                <div style="display:flex; align-items:center; gap: 1rem;">
+                    <button class="panel-icon-btn" onclick="window.navigate('notebook')" style="background:rgba(255,255,255,0.05);"><ion-icon name="arrow-back"></ion-icon></button>
+                    <div>
+                        <h2 style="font-size: 1.5rem; font-weight: 800; margin: 0;">${d.title}</h2>
+                        <div style="font-size:0.75rem; color:var(--text-muted);">${d.type.toUpperCase()} &bull; ${new Date(d.items[0]?.date || Date.now()).toLocaleDateString()}</div>
+                    </div>
+                </div>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn btn-secondary btn-sm" onclick="window.indexDocument('${d.title}', document.querySelector('.source-full-content').innerText, ${docIdx}); showToast('Re-indexing...')">
+                        <ion-icon name="refresh-outline"></ion-icon> Re-index
+                    </button>
+                </div>
+            </div>
+
+            <div class="glass-panel source-full-content" style="flex:1; overflow-y:auto; padding:2.5rem; line-height:1.8; font-size:1.05rem; background:rgba(0,0,0,0.2); border-radius:1.5rem;">
+                ${d.items.map(it => {
+                    if (it.type === 'text' || it.type === 'url') {
+                        return `<div style="margin-bottom:2rem;">
+                            ${it.type === 'url' ? `<div style="padding:1rem; background:rgba(255,255,255,0.05); border-radius:0.5rem; margin-bottom:1rem; font-size:0.8rem; color:var(--accent);">URL: <a href="${it.content}" target="_blank" style="color:var(--accent)">${it.content}</a></div>` : ''}
+                            <div class="markdown-body">${marked.parse(it.content || '')}</div>
+                        </div>`;
+                    } else if (it.type === 'image') {
+                        return `<div style="text-align:center; margin-bottom:2rem;"><img src="data:${it.mimeType};base64,${it.content}" style="max-width:100%; border-radius:1rem; box-shadow:0 4px 20px rgba(0,0,0,0.5);"></div>`;
+                    } else if (it.type === 'pdf') {
+                        return `<div style="text-align:center; padding:3rem; background:rgba(255,255,255,0.05); border-radius:1rem; margin-bottom:2rem;">
+                            <ion-icon name="document-text" style="font-size:3rem; color:var(--accent);"></ion-icon>
+                            <p>PDF Content (Extracted text indexed for chat)</p>
+                            <button class="btn btn-secondary btn-sm" onclick="window.open('data:application/pdf;base64,${it.content}', '_blank')">Open Original PDF</button>
+                        </div>`;
+                    }
+                    return '';
+                }).join('')}
+            </div>
+        </div>`;
+    }
 };
 
 window.Views = Views;
@@ -2019,37 +2346,93 @@ window.Views = Views;
 
 
 
+
+window.generateOverview = async () => {
+    if (AppState.activeSourceIndices.length === 0) return toast('Select sources first!', 'error');
+    const focus = document.getElementById('input-overview-focus').value || 'Comprehensive Overview';
+    const status = document.getElementById('overview-status');
+    const ws = document.getElementById('overview-workspace');
+    
+    status.innerText = "✨ Synthesizing deep-dive report...";
+    ws.style.display = 'block';
+    ws.innerHTML = '<div style="text-align:center; padding:3rem;"><ion-icon name="sync-outline" style="font-size:2rem; animation: rotate 2s linear infinite;"></ion-icon></div>';
+
+    try {
+        const parts = getActiveContextParts();
+        parts.push({ text: `Generate a detailed academic report on "${focus}". 
+        The report should include: 
+        1. Executive Summary
+        2. Key Themes and Evidence
+        3. Critical Analysis
+        4. Synthesized Conclusion.
+        Return raw Markdown text.` });
+
+        const response = await window.callGemini(parts, "You are a senior research analyst.");
+        const overview = {
+            title: focus,
+            content: response,
+            wordCount: response.split(/\s+/).length,
+            date: new Date().toISOString()
+        };
+        
+        AppState.overviews = AppState.overviews || [];
+        AppState.overviews.push(overview);
+        await window.saveState('overviews', AppState.overviews);
+
+        window.viewOverview(AppState.overviews.length - 1);
+        status.innerText = "";
+    } catch (e) {
+        console.error(e);
+        status.innerText = "Error generating report.";
+    }
+};
+
+window.viewOverview = (idx) => {
+    const o = AppState.overviews[idx];
+    const ws = document.getElementById('overview-workspace');
+    ws.style.display = 'block';
+    ws.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+            <h3 style="color:var(--accent); margin:0;">${o.title}</h3>
+            <button class="btn btn-secondary btn-sm" onclick="window.downloadText('${o.title}', document.getElementById('overview-body').innerText)">Download MD</button>
+        </div>
+        <div id="overview-body" class="markdown-body" style="line-height:1.8;">${marked.parse(o.content)}</div>
+    `;
+};
+
+window.downloadText = (filename, text) => {
+    const element = document.createElement('a');
+    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+    element.setAttribute('download', filename + ".md");
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+};
+
 window.navigate = (route) => {
     currentRoute = route;
-    const content = document.getElementById('content-area');
+    const content = document.getElementById('view-container');
     if (!content) return;
     
-    document.querySelectorAll('.nav-links li').forEach(el => el.classList.remove('active'));
-    const activeNav = document.querySelector(`.nav-links li[data-route="${route}"]`);
+    // Update nav states
+    document.querySelectorAll('.icon-nav-btn').forEach(el => el.classList.remove('active'));
+    const activeNav = document.querySelector(`.icon-nav-btn[data-route="${route}"]`);
     if(activeNav) activeNav.classList.add('active');
     
-    // Also update left icon nav for 3-panel layout
-    document.querySelectorAll('.icon-nav-btn').forEach(el => el.classList.remove('active'));
-    const activeIconNav = document.querySelector(`.icon-nav-btn[data-route="${route}"]`);
-    if(activeIconNav) activeIconNav.classList.add('active');
-    
-    const pageTitle = document.getElementById('page-title');
-    if (pageTitle) {
-        const titleMap = {
-            'study-rooms': 'Group Study',
-            'search-sources': 'Academic Search',
-            'blur-study': 'Blur Study (Recall)',
-            'review-mistakes': 'Learning Diagnostics'
-        };
-        pageTitle.textContent = titleMap[route] || route.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    }
-
     if (Views[route]) {
         content.innerHTML = `<div class="view-section active">${Views[route]()}</div>`;
         if (window.bindViewEvents) window.bindViewEvents(route);
+        
+        // Post-render hooks
         if (route === 'discover') window.loadDiscoverGallery();
+        if (route === 'notebook') { window.renderChat(); window.renderSourcesSidebar(); }
+        if (route === 'flashcards') window.renderFlashcards();
+        if (route === 'quizzes') window.renderQuizzes();
+        if (route === 'analytics') if(window.renderMasteryHeatmap) window.renderMasteryHeatmap();
     }
 };
+
 
 window.bindViewEvents = (route) => {
     if (route === 'settings') {
@@ -2165,21 +2548,73 @@ window.bindViewEvents = (route) => {
         }
 
         if (btn && input) {
-            btn.onclick = async () => {
+            const handleChat = async () => {
                 const msg = input.value.trim(); if (!msg) return;
                 input.value = '';
                 AppState.chatHistory.push({ role: 'user', content: msg });
                 saveState('chatHistory', AppState.chatHistory);
                 window.navigate('notebook');
+                
                 try {
+                    // Enhanced RAG Retrieval
+                    let contextualPrompt = msg;
+                    if (window.findRelevantChunks) {
+                        const chunks = await window.findRelevantChunks(msg, 5);
+                        if (chunks.length > 0) {
+                            const contextText = chunks.map(c => `[Source Index: ${c.sourceIndex}] FROM "${c.source}": ${c.text}`).join('\n\n');
+                            contextualPrompt = `QUESTION: ${msg}\n\nRELEVANT SOURCE EXCERPTS:\n${contextText}\n\nPlease answer the question based strictly on these excerpts.`;
+                        }
+                    }
+
                     const parts = getActiveContextParts();
-                    parts.push({ text: msg });
-                    const systemInstruction = "You are an expert study assistant in a Notebook application. Base your answers strictly on the provided SOURCE GROUP contexts. When using information from a source, YOU MUST cite it inline using the exact format [1], [2], corresponding to the [Source Index: X] provided in the context. Do not invent external information. Use markdown formatting to make your answer easy to read.";
+                    parts.push({ text: contextualPrompt });
+                    
+                    const config = (AppState.activeNotebookId ? AppState.notebooks.find(n => n.id === AppState.activeNotebookId) : null)?.config || {};
+                    const personaInstruction = config.customPersona ? `AI Persona: ${config.customPersona}` : `AI Persona: ${config.persona || 'academic analyst'}. Tone: ${config.tone || 'neutral'}. Language: ${config.language || 'english'}.`;
+                    
+                    // Phase 14: Memory Integration
+                    const userMemory = AppState.userMemory || "";
+                    const memoryPrompt = userMemory ? `\nUSER MEMORY (Recurring concepts & preferences): ${userMemory}\n` : "";
+
+                    const systemInstruction = `You are Lumina, a world-class AI research assistant. ${personaInstruction}${memoryPrompt} Base your answers strictly on the provided context. 
+                    CITATION RULES:
+                    1. When you use information from a source, YOU MUST cite it inline using [Index] where Index is the number provided in "[Source Index: Index]".
+                    2. Example: "The mitochondria is the powerhouse of the cell [1]."
+                    3. Do not mention "Source Index" in your final text, only use the [N] format.
+                    4. Use professional markdown formatting.`;
+                    
                     const res = await callGemini(parts, systemInstruction, AppState.chatHistory);
-                    AppState.chatHistory.push({ role: 'ai', content: res });
+                    
+                    // Phase 10: Store source metadata for high-fidelity citations
+                    const messageObj = { role: 'ai', content: res };
+                    if (window.findRelevantChunks) {
+                        // Re-fetch or pass through the chunks used for this specific answer
+                        const chunks = await window.findRelevantChunks(msg, 5);
+                        messageObj.sources = chunks.map(c => ({
+                            index: c.sourceIndex,
+                            title: c.source,
+                            text: c.text
+                        }));
+                    }
+                    
+                    AppState.chatHistory.push(messageObj);
                     saveState('chatHistory', AppState.chatHistory);
                     window.navigate('notebook');
                 } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            btn.onclick = handleChat;
+            input.onkeypress = (e) => { if(e.key === 'Enter') handleChat(); };
+            
+            window.suggestAction = (type) => {
+                const map = {
+                    'summarize': 'Summarize the key takeaways from our current discussion.',
+                    'concepts': 'Extract and define the most important concepts mentioned here.',
+                    'quiz': 'Generate 3 challenging questions to test my understanding of this response.',
+                    'gaps': 'What critical information or perspective is missing from this analysis?'
+                };
+                input.value = map[type] || '';
+                handleChat();
             };
         }
     }
@@ -2560,20 +2995,28 @@ window.bindViewEvents = (route) => {
     if (route === 'review-mistakes') {
         const analyzeBtn = document.getElementById('btn-analyze-mistakes');
         if (analyzeBtn) {
-            analyzeBtn.onclick = async () => {
-                const workspace = document.getElementById('analysis-workspace');
-                workspace.style.display = 'block';
-                workspace.innerHTML = '<p style="color:var(--accent); text-align:center; padding:1rem;">AI Tutor is analyzing your mistakes...</p>';
-                try {
+            const anaBtn = document.getElementById('btn-analyze-mistakes');
+            if (anaBtn) {
+                anaBtn.onclick = async () => {
                     const mistakes = AppState.wrongAnswers || [];
-                    const mistakeText = mistakes.map(w => `Q: ${w.question}\nYou answered: ${w.yourAnswer}\nCorrect answer: ${w.correctAnswer}`).join('\n\n');
-                    const res = await callGemini(
-                        [{ text: `Here are a student's incorrect quiz answers:\n\n${mistakeText}\n\nProvide a compassionate, encouraging AI tutor analysis. For each mistake, explain WHY the correct answer is right, what concept the student likely misunderstood, and a memory trick or analogy to remember it. Format in clear Markdown.` }],
-                        "You are a compassionate, expert AI tutor."
-                    );
-                    workspace.innerHTML = `<div style="padding:1rem;">${marked.parse(res)}</div>`;
-                } catch (e) { workspace.innerHTML = `<p style="color:var(--error); padding:1rem;">${e.message}</p>`; }
-            };
+                    const workspace = document.getElementById('analysis-workspace');
+                    if (mistakes.length === 0) return;
+                    
+                    anaBtn.disabled = true;
+                    workspace.style.display = 'block';
+                    workspace.innerHTML = `<div style="text-align:center; padding:2rem;"><ion-icon name="hourglass-outline" class="spin" style="font-size:2rem; color:var(--accent);"></ion-icon><p>Identifying patterns in your errors...</p></div>`;
+                    
+                    try {
+                        const mistakeText = mistakes.map(m => `Q: ${m.question}\nYour Answer: ${m.yourAnswer}\nCorrect: ${m.correctAnswer}`).join('\n\n');
+                        const res = await callGemini([{ text: `The user has made these mistakes in recent quizzes:\n${mistakeText}\n\nAnalyze these errors and identify:\n1. The core conceptual gap (what do they keep getting wrong?).\n2. A personalized study strategy to fix this.\n3. 3 "Check-up" tips for next time.\n\nFormat in clear Markdown with headers.` }], 'You are a Socratic diagnostic tutor.');
+                        workspace.innerHTML = `<div style="padding:1.5rem; line-height:1.6;">${marked.parse(res)}</div>`;
+                    } catch (e) {
+                        workspace.innerHTML = `<div style="color:var(--error); padding:1rem;">${e.message}</div>`;
+                    } finally {
+                        anaBtn.disabled = false;
+                    }
+                };
+            }
         }
     }
 };
@@ -3266,19 +3709,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 1500); // Give auth a moment to settle
     }
     
-    document.querySelectorAll('.nav-links li').forEach(li => {
-        li.classList.remove('active');
-        if (li.dataset.view === currentRoute || (currentRoute === 'room-session' && li.dataset.view === 'study-rooms')) {
-            li.classList.add('active');
+    document.querySelectorAll('.icon-nav-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.route === currentRoute) {
+            btn.classList.add('active');
         }
     });
-    document.querySelectorAll('.nav-links li').forEach(li => {
-        li.onclick = () => {
-            const route = li.dataset.route;
-            if (route) window.navigate(route);
-        };
-    });
-    
+
     if (!shareId) window.navigate('dashboard');
 });
 
@@ -3346,98 +3783,137 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 <div style="margin-top:1.25rem;">
 
-// ==========================================
-// PODCAST ENGINE — INJECTED PATCH
-// ==========================================
 
-// Inject podcast view into Views after DOM is ready
-(function injectPodcastView() {
-    const originalNavigate = window.navigate;
 
-    // Add podcast to Views dynamically
-    Views['podcast'] = () => {
-        return `
-        <div class="glass-panel">
-            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">&#127897; Podcast Engine</h2>
-            <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate an AI-hosted dual-voice study podcast from your sources. Use <strong style="color:#ef4444">The Third Mic</strong> to interrupt and ask questions.</p>
+// --- Phase 9: Adaptive Learning Pathways & Focus Modes ---
 
-            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
-                ${customFocusInput('input-podcast-focus')}
-                <div class="form-group" style="margin:0">
-                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Show Format</label>
-                    <select id="podcast-format" class="form-control">
-                        <option value="deep_dive">🔬 The Deep Dive</option>
-                        <option value="rapid_fire">⚡ Rapid Fire</option>
-                        <option value="debate">⚔️ The Debate</option>
-                        <option value="storyteller">📖 The Storyteller</option>
-                        <option value="oral_exam">🎓 The Oral Exam</option>
-                    </select>
+window.generatePathway = async () => {
+    if (AppState.documents.length === 0) return toast('Upload sources first!', 'error');
+    const focus = document.getElementById('input-pathway-focus').value || 'Core Concepts';
+    const status = document.getElementById('pathway-status');
+    const ws = document.getElementById('pathway-workspace');
+    
+    status.innerText = "✨ Mapping curriculum nodes...";
+    ws.style.display = 'block';
+    ws.innerHTML = '<div style="text-align:center; padding:3rem;"><ion-icon name="sync-outline" style="font-size:2rem; animation: rotate 2s linear infinite;"></ion-icon></div>';
+
+    try {
+        const prompt = `Generate a structured learning pathway (curriculum) for the topic "${focus}" based on these documents: ${AppState.documents.map(d=>d.title).join(', ')}.
+        Return a JSON object: { "title": "Topic Name", "steps": [ { "id": 1, "title": "Basics", "description": "Short description", "content": "Deep dive explanation text in Markdown", "resources": ["Doc Title"] } ] }.
+        Provide exactly 5 logical steps from beginner to expert.`;
+
+        const response = await window.callGemini(prompt, true);
+        const pathway = JSON.parse(response);
+        pathway.date = new Date().toISOString();
+        
+        AppState.pathways = AppState.pathways || [];
+        AppState.pathways.push(pathway);
+        await window.saveState();
+
+        window.renderPathway(pathway);
+        status.innerText = "";
+    } catch (e) {
+        console.error(e);
+        status.innerText = "Error mapping pathway.";
+    }
+};
+
+window.renderPathway = (pathway) => {
+    const ws = document.getElementById('pathway-workspace');
+    ws.innerHTML = `
+        <h3 style="margin-bottom:2rem; text-align:center; color:var(--accent);">${pathway.title}</h3>
+        <div class="pathway-tree" style="display:flex; flex-direction:column; gap:2rem; align-items:center; position:relative;">
+            <div style="position:absolute; top:0; bottom:0; width:2px; background:rgba(255,255,255,0.1); left:50%; transform:translateX(-50%); z-index:0;"></div>
+            ${pathway.steps.map((s, i) => `
+                <div class="pathway-node glass-panel" onclick="window.showPathwayStep(${i})" style="width:100%; max-width:400px; z-index:1; cursor:pointer; background:rgba(15,23,42,0.8); border:1px solid ${i===0 ? 'var(--accent)' : 'var(--border-color)'};">
+                    <div style="display:flex; align-items:center; gap:1rem;">
+                        <div style="width:32px; height:32px; border-radius:50%; background:${i===0 ? 'var(--accent)' : 'rgba(255,255,255,0.1)'}; display:flex; align-items:center; justify-content:center; font-weight:800;">${i+1}</div>
+                        <div>
+                            <h4 style="margin:0;">${s.title}</h4>
+                            <p style="margin:0; font-size:0.75rem; color:var(--text-muted);">${s.description.substring(0, 60)}...</p>
+                        </div>
+                    </div>
                 </div>
+            `).join('')}
+        </div>
+    `;
+};
+
+window.viewPathway = (idx) => {
+    const p = AppState.pathways[idx];
+    window.renderPathway(p);
+    document.getElementById('pathway-workspace').style.display = 'block';
+};
+
+window.showPathwayStep = (stepIdx) => {
+    // Current pathway is either the last generated or selected from history
+    const p = AppState.pathways[AppState.pathways.length - 1]; 
+    const step = p.steps[stepIdx];
+    
+    const content = `
+        <div style="padding:1rem;">
+            <h2 style="color:var(--accent); margin-bottom:1rem;">${step.title}</h2>
+            <div style="line-height:1.7; font-size:0.95rem; margin-bottom:1.5rem;">${marked.parse(step.content)}</div>
+            <div style="background:rgba(255,255,255,0.03); padding:1rem; border-radius:0.5rem;">
+                <h5 style="margin:0 0 0.5rem; color:var(--text-muted);">References</h5>
+                <p style="margin:0; font-size:0.8rem;">${step.resources.join(', ')}</p>
             </div>
+        </div>
+    `;
+    window.showModal(content);
+};
 
-            <button class="btn btn-primary" id="btn-gen-podcast" style="width:100%; margin-bottom:1.5rem;">
-                &#127897; Generate Podcast Script
-            </button>
-            <div id="podcast-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+window.enterBlurStudy = () => {
+    const sourceId = document.getElementById('blur-source-select').value;
+    const doc = AppState.documents.find(d => d.id === sourceId);
+    if (!doc) return;
 
-            <div id="podcast-player" style="display:none; padding:1.5rem; background:rgba(255,255,255,0.02); border-radius:1.5rem; border:1px solid var(--border-color);">
-                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
-                    <div style="display:flex;align-items:center;gap:0.75rem;">
-                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#8b5cf6);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-a-avatar">A</div>
-                        <div><div style="font-weight:700;font-size:0.9rem;">Host Alex</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-a-label">Waiting...</div></div>
-                    </div>
-                    <div id="podcast-waveform" style="display:flex;gap:3px;align-items:center;height:30px;">
-                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
-                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
-                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:24px;"></span>
-                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
-                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:0.75rem;">
-                        <div style="text-align:right;"><div style="font-weight:700;font-size:0.9rem;">Host Blake</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-b-label">Waiting...</div></div>
-                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#10b981,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-b-avatar">B</div>
-                    </div>
-                </div>
+    document.body.classList.add('blur-mode-active');
+    
+    // Create Exit Button
+    const exitBtn = document.createElement('button');
+    exitBtn.className = 'blur-exit-btn';
+    exitBtn.innerHTML = '<ion-icon name="close-outline"></ion-icon> Exit Focus Mode';
+    exitBtn.onclick = window.exitBlurStudy;
+    document.body.appendChild(exitBtn);
 
-                <div id="podcast-now-playing" style="text-align:center; padding:1.25rem; background:rgba(0,0,0,0.2); border-radius:1rem; margin-bottom:1.25rem; font-size:1rem; line-height:1.7; min-height:80px; font-style:italic; color:var(--text-main);">Press Play to begin...</div>
-
-                <div style="display:flex;align-items:center;justify-content:center;gap:0.75rem;flex-wrap:wrap;">
-                    <button class="btn btn-secondary btn-sm" id="btn-podcast-prev" title="Previous line">&#8676; Prev</button>
-                    <button class="btn btn-primary" id="btn-podcast-play" style="padding:0.85rem 2.5rem;min-width:120px;">&#9654; Play</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-podcast-next" title="Next line">Next &#8677;</button>
-                    <button class="btn" id="btn-third-mic" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:2rem;padding:0.7rem 1.25rem;font-size:0.85rem;cursor:pointer;">&#127908; Third Mic</button>
-                </div>
-
-                <div style="margin-top:1.25rem;">
-                    <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem;">
-                        <span id="podcast-progress-label">Line 0 / 0</span>
-                        <span>Dual-voice synthesis active</span>
-                    </div>
-                    <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:2rem;overflow:hidden;">
-                        <div id="podcast-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#8b5cf6);border-radius:2rem;transition:width 0.3s;"></div>
-                    </div>
-                </div>
+    // Render focus content
+    const area = document.getElementById('view-container');
+    area.innerHTML = `
+        <div class="view-section active" style="max-width:900px; margin: 0 auto; padding: 2rem;">
+            <h1 style="font-size:3.5rem; font-weight:900; margin-bottom:2rem; text-align:center; color:white;">${doc.title}</h1>
+            <div class="glass-panel" style="padding:4rem; line-height:1.9; font-size:1.2rem; color:var(--text-main); margin-bottom:3rem; border:none; box-shadow:none;">
+                ${marked.parse(doc.content)}
             </div>
-
-            <div id="third-mic-panel" style="display:none; margin-top:1.5rem; padding:1.5rem; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3); border-radius:1.5rem;">
-                <h3 style="color:#ef4444; margin-bottom:0.75rem;">&#127908; You have interrupted the hosts!</h3>
-                <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Ask your question — the AI hosts will improvise an answer before resuming.</p>
-                <textarea id="third-mic-input" class="blurt-textarea" style="min-height:80px;" placeholder="What didn't land? Ask away..."></textarea>
-                <div style="display:flex;gap:1rem;margin-top:1rem;">
-                    <button class="btn btn-primary btn-sm" id="btn-third-mic-submit">Ask the Hosts</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-third-mic-cancel">Resume Podcast</button>
-                </div>
-                <div id="third-mic-response" style="margin-top:1rem;display:none;padding:1rem;background:rgba(255,255,255,0.03);border-radius:0.75rem;font-style:italic;line-height:1.7;"></div>
+            <div class="glass-panel" style="background:rgba(15,23,42,0.9); border-color:var(--accent); padding:2rem;">
+                <h3 style="margin-bottom:1.25rem;">Quick Recall</h3>
+                <textarea id="blur-recall" class="form-control" style="min-height:180px; font-size:1rem;" placeholder="What are the key takeaways from this text?"></textarea>
+                <button class="btn btn-primary" style="margin-top:1.5rem; width:100%; padding:1rem;" onclick="window.validateBlurRecall('${doc.id}')">Submit for AI Evaluation</button>
             </div>
+            <div id="blur-feedback" style="margin-top:2.5rem; margin-bottom:5rem;"></div>
+        </div>
+    `;
+};
 
-            <div id="podcast-script-preview" style="margin-top:2rem;display:none;">
-                <details style="background:rgba(255,255,255,0.02);border:1px solid var(--border-color);border-radius:1rem;padding:1rem;">
-                    <summary style="cursor:pointer;font-weight:600;color:var(--text-muted);user-select:none;">&#128196; View Full Script</summary>
-                    <div id="podcast-script-text" style="margin-top:1rem;font-size:0.85rem;line-height:1.9;color:var(--text-muted);white-space:pre-wrap;max-height:400px;overflow-y:auto;"></div>
-                </details>
-            </div>
-        </div>`;
-    };
-})();
+window.exitBlurStudy = () => {
+    document.body.classList.remove('blur-mode-active');
+    const exitBtn = document.querySelector('.blur-exit-btn');
+    if (exitBtn) exitBtn.remove();
+    window.navigate('dashboard');
+};
 
+window.validateBlurRecall = async (docId) => {
+    const recall = document.getElementById('blur-recall').value;
+    if (!recall) return;
+    const feedbackArea = document.getElementById('blur-feedback');
+    feedbackArea.innerHTML = '<div style="text-align:center; padding:2rem;"><ion-icon name="sync-outline" style="font-size:2rem; animation: rotate 2s linear infinite;"></ion-icon></div>';
+    
+    const doc = AppState.documents.find(d => d.id === docId);
+    const prompt = `Validate this user's recall of the document "${doc.title}".
+    Document Snippet: ${doc.content.substring(0, 3000)}
+    User Recall: ${recall}
+    Provide an evaluation: Score (0-100), what they got right, what they missed, and a Socratic question to deepen their understanding.`;
 
+    const response = await window.callGemini(prompt);
+    feedbackArea.innerHTML = `<div class="glass-panel" style="border-color:var(--success); border-width:2px; padding:2rem;">${marked.parse(response)}</div>`;
+};

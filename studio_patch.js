@@ -68,7 +68,18 @@ window.generateStudio = async (type) => {
             const deck = window.parseJsonSafe ? window.parseJsonSafe(res) : JSON.parse(res);
             deck.date = new Date().toISOString();
             
-            outputHtml = `<div class="presentation-slides">`;
+            outputHtml = `
+            <div style="margin-bottom:1.5rem; display:flex; gap:0.75rem; justify-content:center;">
+                <button class="btn btn-primary" onclick="window.playCinematicVideo(0)" style="flex:1; padding:1rem; border-radius:1rem; font-weight:800; display:flex; align-items:center; justify-content:center; gap:0.75rem;">
+                    <ion-icon name="play-circle-outline" style="font-size:1.5rem;"></ion-icon>
+                    Watch Cinematic
+                </button>
+                <button class="btn btn-secondary" onclick="window.exportPresentationPDF()" style="flex:1; padding:1rem; border-radius:1rem; font-weight:800; display:flex; align-items:center; justify-content:center; gap:0.75rem; background:rgba(255,255,255,0.05);">
+                    <ion-icon name="download-outline" style="font-size:1.5rem;"></ion-icon>
+                    Export PDF
+                </button>
+            </div>
+            <div class="presentation-slides">`;
             deck.slides.forEach((s, idx) => {
                 outputHtml += `
                 <div class="glass-panel" style="margin-bottom:0.75rem; padding:1.25rem; position:relative; background:rgba(255,255,255,0.03);">
@@ -100,7 +111,13 @@ window.generateStudio = async (type) => {
             const res = await window.callGemini(parts, "You are a knowledge graph expert. Return ONLY raw valid JSON.", null, "application/json");
             const graph = window.parseJsonSafe ? window.parseJsonSafe(res) : JSON.parse(res);
             
-            outputHtml = `<div id="temp-km-container" style="width:100%; height:350px; background:rgba(0,0,0,0.2); border-radius:1rem; border:1px solid var(--border-color);"></div>`;
+            outputHtml = `
+                <div style="margin-bottom:1rem; display:flex; justify-content:flex-end;">
+                    <button class="btn btn-secondary btn-sm" onclick="window.exportKnowledgeMapSVG()" style="background:rgba(255,255,255,0.05); font-size:0.7rem; border-radius:0.5rem; display:flex; align-items:center; gap:0.4rem;">
+                        <ion-icon name="download-outline"></ion-icon> Export SVG
+                    </button>
+                </div>
+                <div id="temp-km-container" style="width:100%; height:350px; background:rgba(0,0,0,0.2); border-radius:1rem; border:1px solid var(--border-color);"></div>`;
             rawContent = graph;
             
         } else {
@@ -110,19 +127,25 @@ window.generateStudio = async (type) => {
             rawContent = res;
         }
         
-        // Save to Active Notebook Notes
+        // Save to Active Notebook Notes & Global State
         const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
         if (nb) {
-            if (!nb.notes) nb.notes = [];
-            nb.notes.unshift({
-                id: Math.random().toString(36).substring(2, 9),
-                type: type,
-                title: `${type.charAt(0).toUpperCase() + type.slice(1)}: ${focus}`,
-                content: rawContent,
-                html: outputHtml,
-                date: new Date().toISOString()
-            });
-            window.saveState('notebooks', window.AppState.notebooks);
+            if (type === 'presentation') {
+                if (!window.AppState.presentations) window.AppState.presentations = [];
+                window.AppState.presentations.unshift(rawContent);
+                window.saveState('presentations', window.AppState.presentations);
+            } else {
+                if (!nb.notes) nb.notes = [];
+                nb.notes.unshift({
+                    id: Math.random().toString(36).substring(2, 9),
+                    type: type,
+                    title: `${type.charAt(0).toUpperCase() + type.slice(1)}: ${focus}`,
+                    content: rawContent,
+                    html: outputHtml,
+                    date: new Date().toISOString()
+                });
+                window.saveState('notebooks', window.AppState.notebooks);
+            }
         }
         
         // Render

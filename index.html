@@ -82,9 +82,17 @@
                     <ion-icon name="bar-chart-outline"></ion-icon>
                     <span>Analytics</span>
                 </button>
+                <button class="icon-nav-btn" data-route="review-mistakes" onclick="window.navigate('review-mistakes')" title="Mistake Bank">
+                    <ion-icon name="bug-outline"></ion-icon>
+                    <span>Mistakes</span>
+                </button>
             </div>
 
             <div class="icon-nav-bottom">
+                <button class="icon-nav-btn" onclick="window.showHelpGuide()" title="Help & Onboarding">
+                    <ion-icon name="help-circle-outline"></ion-icon>
+                    <span>Help</span>
+                </button>
                 <button class="icon-nav-btn" data-route="settings" onclick="window.navigate('settings')" title="Settings">
                     <ion-icon name="settings-outline"></ion-icon>
                     <span>Settings</span>
@@ -96,302 +104,46 @@
         </nav>
 
         <!-- ② Main Workspace (3-panel for notebook mode, full-width for other routes) -->
-        <div class="workspace" id="workspace">
-
-            <!-- ② A — Sources Panel (Left) -->
-            <aside class="sources-panel" id="sources-panel">
-                <div class="panel-header">
-                    <div class="panel-header-left">
-                        <ion-icon name="layers-outline" style="color:var(--accent);font-size:1rem;"></ion-icon>
-                        <span class="panel-header-title">Sources</span>
-                        <span class="source-count-badge" id="source-count-badge">0</span>
-                    </div>
-                    <div class="panel-header-actions">
-                        <button class="panel-icon-btn" onclick="window.openIngestModal()" title="Add Source" id="btn-add-source-panel">
-                            <ion-icon name="add-outline"></ion-icon>
-                        </button>
-                        <button class="panel-icon-btn" onclick="window.togglePanel('sources-panel')" title="Collapse Sources">
-                            <ion-icon name="chevron-back-outline"></ion-icon>
-                        </button>
-                    </div>
-                </div>
-                <div class="panel-body" id="sources-panel-body">
-                    <!-- Notebook context bar -->
-                    <div class="notebook-context-bar" id="notebook-context-bar" style="display:none;">
-                        <ion-icon name="book-outline"></ion-icon>
-                        <span id="notebook-context-title">No notebook selected</span>
-                    </div>
-                    <!-- Sources list -->
-                    <div class="sources-list-v2" id="global-sources-list">
-                        <div class="sources-empty-state">
-                            <ion-icon name="cloud-upload-outline"></ion-icon>
-                            <p>Add sources to get started</p>
-                            <button class="btn btn-primary btn-sm" onclick="window.openIngestModal()">
-                                <ion-icon name="add-outline"></ion-icon> Add Source
-                            </button>
-                        </div>
-                    </div>
-                    <!-- Source Discovery -->
-                    <div id="source-discovery-panel" style="display:none;" class="source-discovery-panel">
-                        <div class="source-discovery-header">
-                            <ion-icon name="bulb-outline" style="color:var(--warning)"></ion-icon>
-                            <span>Suggested Sources</span>
-                        </div>
-                        <div id="source-discovery-list"></div>
-                    </div>
-                </div>
-                <!-- Inline Source Viewer (slides in from bottom) -->
-                <div class="source-viewer-inline" id="source-viewer-inline" style="display:none;">
-                    <div class="source-viewer-inline-header">
-                        <span id="source-viewer-title">Source</span>
-                        <button class="panel-icon-btn" onclick="window.closeSourceViewer()">
-                            <ion-icon name="close-outline"></ion-icon>
-                        </button>
-                    </div>
-                    <div class="source-viewer-inline-body" id="source-viewer-body"></div>
-                </div>
-            </aside>
-
-            <!-- ② B — Center Panel (Chat / Route View) -->
-            <main class="center-panel" id="center-panel">
-                <!-- Top bar -->
-                <header class="center-topbar">
-                    <button class="panel-icon-btn" onclick="window.togglePanel('sources-panel')" title="Toggle Sources" id="btn-toggle-sources">
-                        <ion-icon name="layers-outline"></ion-icon>
-                    </button>
-                    <div class="center-topbar-breadcrumb">
-                        <span id="page-title">Notebooks</span>
-                    </div>
-                    <div class="center-topbar-actions">
-                        <div id="api-key-status" class="status-badge missing">API Key Missing</div>
-                        <button class="panel-icon-btn" id="btn-theme-toggle" onclick="window.toggleTheme()" title="Toggle Light/Dark Mode">
-                            <ion-icon name="moon-outline" id="theme-icon"></ion-icon>
-                        </button>
-                        <button class="panel-icon-btn" onclick="window.togglePanel('studio-panel')" title="Toggle Studio">
-                            <ion-icon name="color-palette-outline"></ion-icon>
-                        </button>
-                    </div>
-                </header>
-
-                <!-- Content Area (all routes render here) -->
-                <div id="content-area" class="content-area">
-                    <!-- Views injected here -->
-                </div>
-            </main>
-
-            <!-- ② C — Studio Panel (Right) -->
-            <aside class="studio-panel" id="studio-panel">
-                <div class="panel-header">
-                    <div class="panel-header-left">
-                        <ion-icon name="color-palette-outline" style="color:#8b5cf6;font-size:1rem;"></ion-icon>
-                        <span class="panel-header-title">Studio</span>
-                    </div>
-                    <div class="panel-header-actions">
-                        <button class="panel-icon-btn" onclick="window.togglePanel('studio-panel')" title="Collapse Studio">
-                            <ion-icon name="chevron-forward-outline"></ion-icon>
-                        </button>
-                    </div>
-                </div>
-                <div class="panel-body" id="studio-panel-body">
-                    <!-- Studio Tiles -->
-                    <div class="studio-tiles" id="studio-tiles">
-                        <!-- Audio Overview Tile -->
-                        <div class="studio-tile" id="tile-audio">
-                            <div class="studio-tile-header" onclick="window.toggleStudioTile('audio-content')">
-                                <div class="studio-tile-icon" style="background:linear-gradient(135deg,#3b82f6,#8b5cf6)">
-                                    <ion-icon name="radio-outline"></ion-icon>
-                                </div>
-                                <div>
-                                    <div class="studio-tile-title">Audio Overviews</div>
-                                    <div class="studio-tile-subtitle">AI podcast from sources</div>
-                                </div>
-                                <ion-icon name="chevron-down-outline" class="tile-chevron" id="chevron-audio"></ion-icon>
-                            </div>
-                            <div class="studio-tile-content" id="audio-content" style="display:none;">
-                                <div class="studio-tile-outputs" id="audio-outputs"></div>
-                                <button class="btn btn-primary btn-sm" style="width:100%; margin-top:0.75rem;" onclick="window.openAudioOverviewModal()">
-                                    <ion-icon name="add-outline"></ion-icon> Generate Audio Overview
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Video Overview Tile -->
-                        <div class="studio-tile" id="tile-video">
-                            <div class="studio-tile-header" onclick="window.toggleStudioTile('video-content')">
-                                <div class="studio-tile-icon" style="background:linear-gradient(135deg,#10b981,#06b6d4)">
-                                    <ion-icon name="film-outline"></ion-icon>
-                                </div>
-                                <div>
-                                    <div class="studio-tile-title">Video Overview</div>
-                                    <div class="studio-tile-subtitle">Narrated slide presentation</div>
-                                </div>
-                                <ion-icon name="chevron-down-outline" class="tile-chevron" id="chevron-video"></ion-icon>
-                            </div>
-                            <div class="studio-tile-content" id="video-content" style="display:none;">
-                                <div class="studio-tile-outputs" id="video-outputs"></div>
-                                <button class="btn btn-primary btn-sm" style="width:100%; margin-top:0.75rem;" onclick="window.generateVideoOverview()">
-                                    <ion-icon name="play-outline"></ion-icon> Generate Video Overview
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Mind Maps Tile -->
-                        <div class="studio-tile" id="tile-mindmap">
-                            <div class="studio-tile-header" onclick="window.toggleStudioTile('mindmap-content')">
-                                <div class="studio-tile-icon" style="background:linear-gradient(135deg,#f59e0b,#ef4444)">
-                                    <ion-icon name="git-network-outline"></ion-icon>
-                                </div>
-                                <div>
-                                    <div class="studio-tile-title">Mind Map</div>
-                                    <div class="studio-tile-subtitle">Interactive concept graph</div>
-                                </div>
-                                <ion-icon name="chevron-down-outline" class="tile-chevron" id="chevron-mindmap"></ion-icon>
-                            </div>
-                            <div class="studio-tile-content" id="mindmap-content" style="display:none;">
-                                <div class="studio-tile-outputs" id="mindmap-outputs"></div>
-                                <button class="btn btn-primary btn-sm" style="width:100%; margin-top:0.75rem;" onclick="window.navigate('studio'); setTimeout(()=>window.generateStudio('knowledgemap'),100)">
-                                    <ion-icon name="add-outline"></ion-icon> Generate Mind Map
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Reports Tile -->
-                        <div class="studio-tile" id="tile-reports">
-                            <div class="studio-tile-header" onclick="window.toggleStudioTile('reports-content')">
-                                <div class="studio-tile-icon" style="background:linear-gradient(135deg,#ec4899,#8b5cf6)">
-                                    <ion-icon name="newspaper-outline"></ion-icon>
-                                </div>
-                                <div>
-                                    <div class="studio-tile-title">Reports & Study</div>
-                                    <div class="studio-tile-subtitle">Guides, FAQs, timelines…</div>
-                                </div>
-                                <ion-icon name="chevron-down-outline" class="tile-chevron" id="chevron-reports"></ion-icon>
-                            </div>
-                            <div class="studio-tile-content" id="reports-content" style="display:none;">
-                                <div class="studio-report-grid">
-                                    <button class="studio-report-btn" onclick="window.generateOverview('studyguide')">📚 Study Guide</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('briefing')">📋 Briefing Doc</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('faq')">❓ FAQ</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('timeline')">📅 Timeline</button>
-                                    <button class="studio-report-btn" onclick="window.navigate('flashcards')">🃏 Flashcards</button>
-                                    <button class="studio-report-btn" onclick="window.navigate('quizzes')">✏️ Quiz</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('learningguide')">🗺️ Learning Guide</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('infographic')">🖼️ Infographic</button>
-                                    <button class="studio-report-btn" onclick="window.navigate('studio')">🎭 Slide Deck</button>
-                                    <button class="studio-report-btn" onclick="window.generateOverview('datatable')">📊 Data Table</button>
-                                </div>
-                                <div class="studio-tile-outputs" id="reports-outputs" style="margin-top:0.75rem;"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Studio Quick Report Result -->
-                    <div id="studio-quick-result" style="display:none; margin-top:1rem;">
-                        <div class="panel-section-header">
-                            <span id="studio-quick-type"></span>
-                            <button class="panel-icon-btn" onclick="document.getElementById('studio-quick-result').style.display='none'">
-                                <ion-icon name="close-outline"></ion-icon>
-                            </button>
-                        </div>
-                        <div id="studio-quick-content" class="studio-quick-content"></div>
-                    </div>
-                </div>
-            </aside>
-        </div><!-- /workspace -->
-    </div><!-- /lumina-app -->
-
-    <!-- ============================================================ -->
-    <!--  OVERLAYS                                                    -->
-    <!-- ============================================================ -->
-
-    <!-- Notification Toast Container -->
-    <div id="toast-container" class="toast-container"></div>
-
-    <!-- Modal Container -->
-    <div id="modal-container" class="modal-container hidden">
-        <div class="modal-backdrop" onclick="document.getElementById('modal-container').classList.add('hidden')"></div>
-        <div class="modal-content" id="modal-body"></div>
-    </div>
-
-    <!-- Audio Overview Config Modal -->
-    <div id="audio-modal" class="modal-container hidden">
-        <div class="modal-backdrop" onclick="document.getElementById('audio-modal').classList.add('hidden')"></div>
-        <div class="modal-content" id="audio-modal-body">
-            <div style="padding:2rem;">
-                <h2 style="margin-bottom:1.5rem; font-size:1.5rem;">🎙 Generate Audio Overview</h2>
-                <div class="form-group">
-                    <label>Format</label>
-                    <select id="ao-format" class="form-control">
-                        <option value="deep_dive">🔬 Deep Dive (20–40 min)</option>
-                        <option value="brief">⚡ Brief (4 min)</option>
-                        <option value="debate">⚔️ Debate</option>
-                        <option value="critique">🔍 Critique</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Host Tone</label>
-                    <select id="ao-tone" class="form-control">
-                        <option value="Conversational">Conversational</option>
-                        <option value="Professional">Professional</option>
-                        <option value="Academic">Academic</option>
-                        <option value="Humorous">Humorous</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Language</label>
-                    <select id="ao-language" class="form-control">
-                        <option value="English">English</option>
-                        <option value="Spanish">Spanish</option>
-                        <option value="French">French</option>
-                        <option value="German">German</option>
-                        <option value="Portuguese">Portuguese</option>
-                        <option value="Japanese">Japanese</option>
-                        <option value="Korean">Korean</option>
-                        <option value="Chinese">Chinese (Mandarin)</option>
-                        <option value="Arabic">Arabic</option>
-                        <option value="Italian">Italian</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Custom Instructions (optional)</label>
-                    <textarea id="ao-instructions" class="form-control" rows="3" placeholder="e.g. Focus on practical applications, explain like I'm a beginner..."></textarea>
-                </div>
-                <div style="display:flex; gap:1rem; margin-top:1.5rem;">
-                    <button class="btn btn-secondary" onclick="document.getElementById('audio-modal').classList.add('hidden')" style="flex:1">Cancel</button>
-                    <button class="btn btn-primary" onclick="window.generateAudioOverview()" style="flex:2">
-                        <ion-icon name="radio-outline"></ion-icon> Generate
-                    </button>
+        <main class="workspace" id="workspace">
+            <div id="view-container">
+                <!-- Views injected here by router -->
+                <div style="display:flex; align-items:center; justify-content:center; height:100vh; color:var(--text-muted);">
+                    <ion-icon name="sync-outline" class="spin" style="font-size:2rem;"></ion-icon>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
-    <!-- Chat Config Drawer -->
-    <div id="chat-config-drawer" class="chat-config-drawer hidden">
-        <div class="chat-config-content">
+    <!-- UI Components (Modals, Toasts) -->
+    <div id="modal-container" class="modal-container hidden">
+        <div class="modal-backdrop" onclick="document.getElementById('modal-container').classList.add('hidden')"></div>
+        <div class="modal-content glass-panel" id="modal-body"></div>
+    </div>
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Configuration Sidebar (Slide-out) -->
+    <div id="config-panel" class="config-panel glass-panel">
+        <div style="padding:1.5rem;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
-                <h3>Configure Chat</h3>
-                <button class="panel-icon-btn" onclick="document.getElementById('chat-config-drawer').classList.add('hidden')">
-                    <ion-icon name="close-outline"></ion-icon>
-                </button>
+                <h3 style="margin:0;">Notebook Config</h3>
+                <button class="panel-icon-btn" onclick="window.toggleConfigPanel()"><ion-icon name="close-outline"></ion-icon></button>
             </div>
             <div class="form-group">
                 <label>AI Persona</label>
                 <select id="config-persona" class="form-control" onchange="window.saveNotebookConfig()">
-                    <option value="tutor">🎓 Tutor — Explains patiently</option>
-                    <option value="analyst">📊 Analyst — Data-driven insights</option>
-                    <option value="creative">🎨 Creative Assistant — Lateral thinking</option>
-                    <option value="legal">⚖️ Legal Reviewer — Precise and cautious</option>
-                    <option value="socratic">💭 Socratic — Questions to guide you</option>
+                    <option value="academic">Academic Analyst</option>
+                    <option value="socratic">Socratic Tutor</option>
+                    <option value="creative">Creative Strategist</option>
+                    <option value="technical">Technical Expert</option>
                 </select>
             </div>
             <div class="form-group">
                 <label>Response Tone</label>
                 <select id="config-tone" class="form-control" onchange="window.saveNotebookConfig()">
-                    <option value="casual">Casual</option>
-                    <option value="balanced" selected>Balanced</option>
+                    <option value="neutral">Neutral</option>
+                    <option value="encouraging">Encouraging</option>
                     <option value="formal">Formal</option>
-                    <option value="humorous">Humorous</option>
+                    <option value="concise">Concise</option>
                 </select>
             </div>
             <div class="form-group">
@@ -420,21 +172,51 @@
                     <option value="Russian">Russian</option>
                     <option value="Swedish">Swedish</option>
                     <option value="Turkish">Turkish</option>
+                    <option value="Italian">Italian</option>
                 </select>
             </div>
             <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem;">Settings saved per notebook automatically.</div>
         </div>
     </div>
 
+    <script>
+        // --- Phase 18: Onboarding & Help ---
+        window.showHelpGuide = () => {
+            window.showModal('Welcome to Lumina Cognitive OS', `
+                <div style="max-height:400px; overflow-y:auto; padding-right:0.5rem;">
+                    <div style="text-align:center; margin-bottom:2rem;">
+                        <div style="font-size:3rem; margin-bottom:1rem;">🚀</div>
+                        <h3 style="margin-bottom:0.5rem;">NotebookLM 2026 Parity Reached</h3>
+                        <p style="color:var(--text-muted); font-size:0.9rem;">You are using the world's most advanced AI research ecosystem.</p>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+                        <div class="glass-panel" style="padding:1rem; border-color:var(--accent); background:rgba(59,130,246,0.05);">
+                            <h4 style="margin-bottom:0.5rem;"><ion-icon name="documents-outline"></ion-icon> Multi-Source RAG</h4>
+                            <p style="font-size:0.8rem; color:var(--text-muted);">Add PDFs, Website URLs, and YouTube videos. Lumina indexes them for instant academic recall.</p>
+                        </div>
+                        <div class="glass-panel" style="padding:1rem; background:rgba(255,255,255,0.02);">
+                            <h4 style="margin-bottom:0.5rem;"><ion-icon name="videocam-outline"></ion-icon> Cinematic Studio</h4>
+                            <p style="font-size:0.8rem; color:var(--text-muted);">Generate presentation slides and watch them in an interactive, narrated cinematic mode.</p>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" style="width:100%; margin-top:2rem; padding:1rem;" onclick="window.closeModal()">Start Researching</button>
+                </div>
+            `);
+        };
+    </script>
+
     <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd/index.js"></script>
     <script src="ui_utils.js"></script>
     <script type="module" src="app.js"></script>
+    <script type="module" src="rag_engine.js"></script>
     <script type="module" src="notebooks_ext.js"></script>
     <script type="module" src="podcast_patch.js"></script>
     <script type="module" src="km_patch.js"></script>
     <script type="module" src="studio_patch.js"></script>
     <script type="module" src="video_engine.js"></script>
     <script type="module" src="discover_analytics.js"></script>
+    <script type="module" src="vector_utils.js"></script>
+    <script type="module" src="export_engine.js"></script>
     <script type="module" src="podcast_player.js"></script>
 </body>
 </html>

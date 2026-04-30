@@ -95,14 +95,23 @@ window._renderDiscoverGrid = (items) => {
         const noteCount = (nb.notes || []).length;
         const gradient = `linear-gradient(135deg, hsl(${Math.abs(nb.id?.charCodeAt(0) || 200) % 360}, 60%, 30%), hsl(${(Math.abs(nb.id?.charCodeAt(0) || 200) + 120) % 360}, 50%, 20%))`;
         return `
-        <div class="glass-panel discover-card" style="padding:0; overflow:hidden; cursor:pointer; transition:transform 0.2s, box-shadow 0.2s;" onmouseenter="this.style.transform='translateY(-4px)'; this.style.boxShadow='0 12px 32px rgba(0,0,0,0.4)'" onmouseleave="this.style.transform=''; this.style.boxShadow=''">
-            <div style="height:90px; background:${gradient}; display:flex; align-items:center; justify-content:center; font-size:2.5rem;">📓</div>
-            <div style="padding:1.25rem;">
-                <h3 style="font-size:1rem; font-weight:700; margin:0 0 0.4rem; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${nb.title || 'Untitled Notebook'}</h3>
-                <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 1rem;">${sourceCount} sources &bull; ${noteCount} notes &bull; ${new Date(nb.updatedAt || nb.createdAt).toLocaleDateString()}</p>
-                <div style="display:flex; gap:0.5rem;">
-                    <button class="btn btn-primary btn-sm" style="flex:1; font-size:0.75rem;" onclick="window._openSharedNb('${item.shareId}')">Open</button>
-                    <button class="btn btn-secondary btn-sm" style="flex:1; font-size:0.75rem;" onclick="window._cloneSharedNb('${item.shareId}')">Clone</button>
+        <div class="glass-panel discover-card" style="padding:0; border-radius:1.5rem; overflow:hidden; cursor:pointer; transition:all 0.3s cubic-bezier(0.4,0,0.2,1); background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05);" onmouseenter="this.style.transform='translateY(-8px) scale(1.02)'; this.style.borderColor='rgba(59,130,246,0.3)'; this.style.boxShadow='0 20px 40px rgba(0,0,0,0.4)'" onmouseleave="this.style.transform=''; this.style.borderColor='rgba(255,255,255,0.05)'; this.style.boxShadow=''">
+            <div style="height:110px; background:${gradient}; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative;">
+                <div style="font-size:2.8rem; filter:drop-shadow(0 4px 12px rgba(0,0,0,0.3));">📓</div>
+                <div style="position:absolute; bottom:0.5rem; right:0.75rem; background:rgba(0,0,0,0.4); backdrop-filter:blur(4px); padding:0.2rem 0.5rem; border-radius:0.5rem; font-size:0.65rem; color:white; font-weight:700;">PUBLIC</div>
+            </div>
+            <div style="padding:1.5rem;">
+                <h3 style="font-size:1.1rem; font-weight:800; margin:0 0 0.5rem; color:var(--text-main); line-height:1.3;">${nb.title || 'Untitled Notebook'}</h3>
+                <div style="display:flex; gap:0.75rem; margin-bottom:1.25rem;">
+                    <div style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:0.25rem;"><ion-icon name="document-outline"></ion-icon> ${sourceCount}</div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:0.25rem;"><ion-icon name="create-outline"></ion-icon> ${noteCount}</div>
+                </div>
+                <div style="display:flex; gap:0.6rem; align-items:center;">
+                    <button class="btn btn-primary btn-sm" style="flex:1.2; font-size:0.75rem; border-radius:0.75rem;" onclick="window._openSharedNb('${item.shareId}')">View</button>
+                    <button class="btn btn-secondary btn-sm" style="flex:1; font-size:0.75rem; border-radius:0.75rem; background:rgba(255,255,255,0.05);" onclick="window._cloneSharedNb('${item.shareId}')">Clone</button>
+                    <button class="panel-icon-btn" onclick="event.stopPropagation(); window._upvoteSharedNb('${item.shareId}')" style="background:transparent; border:none; display:flex; align-items:center; gap:0.3rem; color:var(--text-muted); font-size:0.8rem;">
+                        <ion-icon name="heart-outline"></ion-icon> ${item.upvotes || 0}
+                    </button>
                 </div>
             </div>
         </div>`;
@@ -139,7 +148,7 @@ window._openSharedNb = (shareId) => {
 window._cloneSharedNb = async (shareId) => {
     if (!window.auth?.currentUser) return window.showToast("Sign in to clone notebooks.", "error");
     try {
-        const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+        const { doc, getDoc, updateDoc, increment } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
         const shareSnap = await getDoc(doc(window.db, "shares", shareId));
         if (!shareSnap.exists()) return window.showToast("Share not found.", "error");
         const { notebookId, ownerId } = shareSnap.data();
@@ -157,10 +166,26 @@ window._cloneSharedNb = async (shareId) => {
 
         window.AppState.notebooks.push(clone);
         window.saveState('notebooks', window.AppState.notebooks);
+        
+        // Phase 15: Track Clones
+        updateDoc(doc(window.db, "shares", shareId), { clones: increment(1) }).catch(e => console.warn(e));
+
         window.showToast("Notebook cloned to your library!", "success");
         window.navigate('notebooks');
     } catch (e) {
         window.showToast("Clone failed: " + e.message, "error");
+    }
+};
+
+window._upvoteSharedNb = async (shareId) => {
+    if (!window.auth?.currentUser) return window.showToast("Sign in to upvote.", "error");
+    try {
+        const { doc, updateDoc, increment } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+        await updateDoc(doc(window.db, "shares", shareId), { upvotes: increment(1) });
+        window.showToast("Upvoted!", "success");
+        window.loadDiscoverGallery();
+    } catch (e) {
+        window.showToast("Upvote failed", "error");
     }
 };
 

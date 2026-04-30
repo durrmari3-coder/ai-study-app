@@ -18,7 +18,17 @@ window.Views.notebooks = () => {
                     <p style="color:var(--text-muted); font-size: 1.1rem;">Your personal research ecosystem.</p>
                 </div>
                 <div style="display:flex; gap: 1.5rem; align-items:center; flex-wrap:wrap;">
+                    ${window.AppState.selectedNotebookIds.length > 0 ? `
+                        <div class="bulk-actions glass-panel" style="padding:0.5rem 1rem; display:flex; gap:0.5rem; background:rgba(239,68,68,0.1); border-color:rgba(239,68,68,0.2);">
+                            <span style="font-size:0.85rem; font-weight:700; color:#ef4444;">${window.AppState.selectedNotebookIds.length} Selected</span>
+                            <button class="btn btn-sm" style="background:var(--error); color:white;" onclick="window.bulkDeleteNotebooks()">Delete</button>
+                            <button class="btn btn-sm btn-secondary" onclick="window.bulkPinNotebooks()">Pin</button>
+                            <button class="btn btn-sm btn-secondary" onclick="window.clearNotebookSelection()">Cancel</button>
+                        </div>
+                    ` : ''}
+
                     <div class="search-input-wrapper" style="position:relative; width: 300px;">
+
                         <ion-icon name="search-outline" style="position:absolute; left:1rem; top:50%; transform:translateY(-50%); color:var(--text-muted);"></ion-icon>
                         <input type="text" placeholder="Search notebooks..." 
                                value="${window.AppState.notebookSearchQuery || ''}"
@@ -47,9 +57,13 @@ window.Views.notebooks = () => {
                     <div class="notebook-card ${nb.pinned ? 'pinned' : ''}" onclick="window.setActiveNotebook('${nb.id}')" 
                          style="position:relative; background:rgba(255,255,255,0.02); border:1px solid var(--border-color); border-radius:1.5rem; overflow:hidden; transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor:pointer;">
                         
-                        <div class="notebook-card-thumbnail" style="height:120px; background: ${nb.thumbnail ? `url(${nb.thumbnail})` : 'linear-gradient(135deg, rgba(96,165,250,0.1) 0%, rgba(139,92,246,0.1) 100%)'}; background-size:cover; display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border-color);">
+                        <div class="notebook-card-thumbnail" style="height:120px; background: ${nb.thumbnail ? `url(${nb.thumbnail})` : 'linear-gradient(135deg, rgba(96,165,250,0.1) 0%, rgba(139,92,246,0.1) 100%)'}; background-size:cover; display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--border-color); position:relative;">
+                            <input type="checkbox" style="position:absolute; top:0.75rem; left:0.75rem; width:20px; height:20px; cursor:pointer;" 
+                                   ${window.AppState.selectedNotebookIds.includes(nb.id) ? 'checked' : ''}
+                                   onclick="event.stopPropagation(); window.toggleNotebookSelection('${nb.id}')">
                             ${!nb.thumbnail ? `<span style="font-size:3rem; filter:drop-shadow(0 4px 8px rgba(0,0,0,0.3));">${nb.emoji || '📓'}</span>` : ''}
                         </div>
+
 
                         <div style="padding: 1.5rem;">
                             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.5rem;">
@@ -234,19 +248,123 @@ window.deleteNotebook = (id) => {
 };
 
 // Set Active Notebook
+// Set Active Notebook
 window.setActiveNotebook = (id) => {
     window.AppState.activeNotebookId = id;
     window.saveState('activeNotebookId', id);
     
-    // Sync the notebook's sources to AppState.documents
+    // Sync the notebook's sources and other state to AppState
     const nb = window.AppState.notebooks.find(n => n.id === id);
     if (nb) {
         window.AppState.documents = nb.sources || [];
+        window.AppState.chatHistory = nb.chatHistory || [];
+        window.AppState.quizzes = nb.quizzes || [];
+        window.AppState.flashcards = nb.flashcards || [];
+        window.AppState.presentations = nb.presentations || [];
+        window.AppState.notes = nb.notes || [];
     }
     
-    if (window.renderSourcesSidebar) window.renderSourcesSidebar();
+    // Phase 11: Initiate Real-time Firestore Listener
+    window.initiateNotebookSync(id);
     
+    if (window.renderSourcesSidebar) window.renderSourcesSidebar();
     window.navigate('notebook');
+};
+
+window.initiateNotebookSync = async (id) => {
+    if (!window.db || !window.auth?.currentUser) return;
+    
+    // Unsubscribe from previous sync if exists
+    if (window._syncUnsubscribe) {
+        window._syncUnsubscribe();
+        window._syncUnsubscribe = null;
+    }
+
+    try {
+        const { doc, onSnapshot } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+        
+        // Find if this is a shared notebook or owned
+        const nb = window.AppState.notebooks.find(n => n.id === id);
+        const ownerId = nb?.ownerId || window.auth.currentUser.uid;
+        
+        const nbDocRef = doc(window.db, `users/${ownerId}/notebooks`, id);
+        
+        window._syncUnsubscribe = onSnapshot(nbDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const data = snapshot.data();
+                
+                // Prevent loops: Only update if the remote version is newer or we don't have it
+                // We use a simple timestamp or change flag
+                if (data.updatedAt !== window._lastLocalUpdate) {
+                    console.log("[Sync] Remote update received for notebook:", id);
+                    
+                    // Merge remote data into local state
+                    const localNb = window.AppState.notebooks.find(n => n.id === id);
+                    if (localNb) {
+                        Object.assign(localNb, data);
+                        // If it's the active notebook, refresh the UI
+                        if (window.AppState.activeNotebookId === id) {
+                            window.AppState.documents = data.sources || [];
+                            window.AppState.chatHistory = data.chatHistory || [];
+                            window.AppState.notes = data.notes || [];
+                            // Re-render if in relevant view
+                            if (window.location.hash.includes('notebook')) {
+                                // debounce render to avoid flicker
+                                if (window._renderTimer) clearTimeout(window._renderTimer);
+                                window._renderTimer = setTimeout(() => window.navigate('notebook'), 100);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (e) {
+        console.warn("Sync failed to initiate:", e.message);
+    }
+};
+
+window.shareNotebook = async (id) => {
+    if (!window.auth?.currentUser) return window.showToast("Sign in to share notebooks.", "error");
+    
+    const nb = window.AppState.notebooks.find(n => n.id === id);
+    if (!nb) return;
+
+    try {
+        const { collection, addDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+        
+        showToast("Generating share link...");
+        
+        const shareData = {
+            notebookId: id,
+            ownerId: window.auth.currentUser.uid,
+            ownerName: window.auth.currentUser.displayName || 'Lumina User',
+            title: nb.title,
+            createdAt: serverTimestamp(),
+            role: 'viewer' // Default to public viewer
+        };
+
+        const docRef = await addDoc(collection(window.db, "shares"), shareData);
+        const shareUrl = `${window.location.origin}${window.location.pathname}?share=${docRef.id}`;
+        
+        window.showModal('Share Notebook', `
+            <div style="text-align:center;">
+                <p style="margin-bottom:1.5rem; color:var(--text-muted);">Anyone with this link can view and clone this notebook.</p>
+                <div class="glass-panel" style="padding:1rem; background:rgba(0,0,0,0.3); border-radius:1rem; display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
+                    <input type="text" value="${shareUrl}" readonly class="form-control" style="background:transparent; border:none; color:var(--accent); font-family:monospace; font-size:0.8rem;">
+                    <button class="btn btn-sm btn-primary" onclick="navigator.clipboard.writeText('${shareUrl}'); window.showToast('Link copied!')">Copy</button>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-muted);">Shared as: <span style="color:var(--success); font-weight:700;">Public Community Resource</span></div>
+            </div>
+        `);
+        
+        // Update notebook state to reflect it is shared
+        nb.isShared = true;
+        nb.shareId = docRef.id;
+        window.saveState('notebooks', window.AppState.notebooks);
+
+    } catch (e) {
+        window.showToast("Sharing failed: " + e.message, "error");
+    }
 };
 
 // Workspace Notes Tab Toggle
@@ -294,6 +412,57 @@ window.saveChatToNotes = (chatIdx) => {
     window.saveState('notebooks', window.AppState.notebooks);
     window.showToast("Note saved to workspace!", "success");
     window.navigate('notebook'); // re-render
+};
+
+window.editNote = (noteIdx) => {
+    const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
+    if (!nb || !nb.notes) return;
+    const note = nb.notes[noteIdx];
+    
+    window.showModal(`Edit Note: ${note.title}`, `
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="edit-note-title" class="form-control" value="${note.title}">
+        </div>
+        <div class="form-group">
+            <label>Content (Markdown)</label>
+            <textarea id="edit-note-content" class="form-control" style="min-height:300px; background:rgba(0,0,0,0.4); color:white; border-color:var(--border-color);">${note.content}</textarea>
+        </div>
+        <button class="btn btn-primary" style="width:100%" onclick="window.saveEditedNote(${noteIdx})">Save Changes</button>
+    `);
+};
+
+window.saveEditedNote = (idx) => {
+    const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
+    const title = document.getElementById('edit-note-title').value;
+    const content = document.getElementById('edit-note-content').value;
+    
+    if (nb && nb.notes[idx]) {
+        nb.notes[idx].title = title;
+        nb.notes[idx].content = content;
+        nb.notes[idx].html = window.marked.parse(content);
+        nb.notes[idx].date = new Date().toISOString();
+        window.saveState('notebooks', window.AppState.notebooks);
+        document.getElementById('modal-container').classList.add('hidden');
+        window.navigate('notebook');
+        window.showToast("Note updated!", "success");
+    }
+};
+
+window.magicFormatNote = async (idx) => {
+    const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
+    if (!nb || !nb.notes[idx]) return;
+    const note = nb.notes[idx];
+    
+    window.showToast("Gemini is performing magic...", "info");
+    try {
+        const res = await window.callGemini([{ text: `Please take the following note and reformat it for maximum clarity, adding professional structure, headers, and bullet points. Preserve all original facts but make it look like a high-quality research document.\n\nNOTE CONTENT:\n${note.content}` }], "You are a master document editor.");
+        note.content = res;
+        note.html = window.marked.parse(res);
+        window.saveState('notebooks', window.AppState.notebooks);
+        window.navigate('notebook');
+        window.showToast("Note enhanced by AI!", "success");
+    } catch (e) { window.showToast(e.message, "error"); }
 };
 
 window.deleteNote = (noteIdx) => {
@@ -382,9 +551,39 @@ window.shareNotebook = async (id) => {
     }
 };
 
+window.toggleNotebookSelection = (id) => {
+    const idx = window.AppState.selectedNotebookIds.indexOf(id);
+    if (idx === -1) window.AppState.selectedNotebookIds.push(id);
+    else window.AppState.selectedNotebookIds.splice(idx, 1);
+    window.navigate('notebooks');
+};
+
+window.clearNotebookSelection = () => {
+    window.AppState.selectedNotebookIds = [];
+    window.navigate('notebooks');
+};
+
+window.bulkDeleteNotebooks = () => {
+    if (!confirm(`Delete ${window.AppState.selectedNotebookIds.length} notebooks?`)) return;
+    window.AppState.notebooks = window.AppState.notebooks.filter(nb => !window.AppState.selectedNotebookIds.includes(nb.id));
+    window.AppState.selectedNotebookIds = [];
+    window.saveState('notebooks', window.AppState.notebooks);
+    window.navigate('notebooks');
+};
+
+window.bulkPinNotebooks = () => {
+    window.AppState.notebooks.forEach(nb => {
+        if (window.AppState.selectedNotebookIds.includes(nb.id)) nb.pinned = true;
+    });
+    window.AppState.selectedNotebookIds = [];
+    window.saveState('notebooks', window.AppState.notebooks);
+    window.navigate('notebooks');
+};
+
 // Auto-navigate to notebooks on load if we are on dashboard
 setTimeout(() => {
     if (window.currentRoute === 'dashboard') {
         window.navigate('notebooks');
     }
 }, 500);
+

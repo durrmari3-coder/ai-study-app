@@ -14,7 +14,7 @@
             <h2 style="font-size: 2rem; margin-bottom: 0.5rem">&#127897; Podcast Engine</h2>
             <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate an AI-hosted dual-voice study podcast from your sources. Use <strong style="color:#ef4444">The Third Mic</strong> to interrupt and ask questions.</p>
 
-            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
                 ${customFocusInput('input-podcast-focus')}
                 <div class="form-group" style="margin:0">
                     <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Show Format</label>
@@ -24,6 +24,33 @@
                         <option value="debate">⚔️ The Debate</option>
                         <option value="storyteller">📖 The Storyteller</option>
                         <option value="oral_exam">🎓 The Oral Exam</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Host Tone</label>
+                    <select id="podcast-style" class="form-control">
+                        <option value="Conversational">Conversational</option>
+                        <option value="Professional">Professional</option>
+                        <option value="Academic">Academic</option>
+                        <option value="Humorous">Humorous</option>
+                        <option value="Socratic">Socratic</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Language</label>
+                    <select id="podcast-language" class="form-control">
+                        <option value="English">English</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Level of Detail</label>
+                    <select id="podcast-detail" class="form-control">
+                        <option value="Concise">Concise (5-8 lines)</option>
+                        <option value="Standard" selected>Standard (10-15 lines)</option>
+                        <option value="Detailed">Detailed (20+ lines)</option>
                     </select>
                 </div>
             </div>
@@ -205,6 +232,14 @@ const bindPodcastEvents = () => {
 
         const focus = document.getElementById('input-podcast-focus').value;
         const format = document.getElementById('podcast-format').value;
+        const tone = document.getElementById('podcast-style') ? document.getElementById('podcast-style').value : 'Conversational';
+        const language = document.getElementById('podcast-language') ? document.getElementById('podcast-language').value : 'English';
+        const detail = document.getElementById('podcast-detail') ? document.getElementById('podcast-detail').value : 'Standard';
+        
+        let lengthInstruction = "20-line";
+        if (detail === 'Concise') lengthInstruction = "10-line";
+        if (detail === 'Detailed') lengthInstruction = "40-line";
+
         const focusInstruction = focus ? `\nUSER FOCUS: ${focus}\n` : '';
 
         const formatInstructions = {
@@ -217,8 +252,8 @@ const bindPodcastEvents = () => {
 
         try {
             const parts = getActiveContextParts();
-            parts.push({ text: `${focusInstruction}Generate a 20-line study podcast script about the provided source material. Format: "${formatInstructions[format] || formatInstructions.deep_dive}"\n\nReturn ONLY raw JSON, no markdown:\n{"lines":[{"host":"A","text":"Host Alex dialogue here"},{"host":"B","text":"Host Blake dialogue here"}]}` });
-            const res = await callGemini(parts, 'You are a podcast script writer. Use natural speech, filler words like "um" and "you know", and make it engaging. Return ONLY raw JSON.', null, 'application/json');
+            parts.push({ text: `${focusInstruction}Generate a ${lengthInstruction} study podcast script about the provided source material in ${language}.\nTone: ${tone}\nFormat: "${formatInstructions[format] || formatInstructions.deep_dive}"\n\nReturn ONLY raw JSON, no markdown:\n{"lines":[{"host":"A","text":"Host Alex dialogue here"},{"host":"B","text":"Host Blake dialogue here"}]}` });
+            const res = await callGemini(parts, `You are a podcast script writer in ${language}. Use natural speech, filler words like "um" and "you know", and make it engaging. Tone should be ${tone}. Return ONLY raw JSON.`, null, 'application/json');
             const data = parseJsonSafe(res);
             podcastLines = data.lines || [];
             podcastIdx = 0;
