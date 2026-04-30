@@ -37,7 +37,7 @@ try {
 const FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest'];
 
 const AppState = {
-    apiKey: '',
+    apiKey: 'AIzaSyBtTQCO11Ye4xwX_yJkZBPjvCSRxwER0vM',
     settings: { studyMode: "medium", model: "gemini-2.5-flash" },
     rooms: [], // Local rooms (folders)
     currentRoomIndex: -1,
@@ -67,7 +67,6 @@ const AppState = {
 
 // Expose globally for extensions
 window.AppState = AppState;
-
 
 let currentRoute = 'dashboard';
 
@@ -133,7 +132,10 @@ const loadLocalData = async () => {
         }
         
         if (window.idbKeyval) {
-            AppState.apiKey = await idbKeyval.get('lumina_apiKey') || '';
+            const storedKey = await idbKeyval.get('lumina_apiKey');
+            if (storedKey && storedKey.startsWith('AIzaSy') && !storedKey.includes('TEST_KEY')) {
+                AppState.apiKey = storedKey;
+            }
             AppState.settings = await idbKeyval.get('lumina_settings') || AppState.settings;
             AppState.searchConfig = await idbKeyval.get('lumina_searchConfig') || AppState.searchConfig;
             AppState.currentRoomIndex = await idbKeyval.get('lumina_currentRoomIndex') ?? -1;
@@ -142,7 +144,10 @@ const loadLocalData = async () => {
             AppState.activeNotebookId = await idbKeyval.get('lumina_activeNotebookId') || null;
             AppState.userTier = await idbKeyval.get('lumina_userTier') || 'free';
         } else {
-            AppState.apiKey = JSON.parse(localStorage.getItem('lumina_apiKey')) || '';
+            const storedKey = localStorage.getItem('lumina_apiKey');
+            if (storedKey && storedKey.startsWith('AIzaSy') && !storedKey.includes('TEST_KEY')) {
+                AppState.apiKey = JSON.parse(storedKey);
+            }
             AppState.settings = JSON.parse(localStorage.getItem('lumina_settings')) || AppState.settings;
             AppState.searchConfig = JSON.parse(localStorage.getItem('lumina_searchConfig')) || AppState.searchConfig;
             AppState.currentRoomIndex = JSON.parse(localStorage.getItem('lumina_currentRoomIndex')) ?? -1;
@@ -3340,6 +3345,70 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
 
                 <div style="margin-top:1.25rem;">
+
+// ==========================================
+// PODCAST ENGINE — INJECTED PATCH
+// ==========================================
+
+// Inject podcast view into Views after DOM is ready
+(function injectPodcastView() {
+    const originalNavigate = window.navigate;
+
+    // Add podcast to Views dynamically
+    Views['podcast'] = () => {
+        return `
+        <div class="glass-panel">
+            <h2 style="font-size: 2rem; margin-bottom: 0.5rem">&#127897; Podcast Engine</h2>
+            <p style="color:var(--text-muted); margin-bottom: 2rem;">Generate an AI-hosted dual-voice study podcast from your sources. Use <strong style="color:#ef4444">The Third Mic</strong> to interrupt and ask questions.</p>
+
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
+                ${customFocusInput('input-podcast-focus')}
+                <div class="form-group" style="margin:0">
+                    <label style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem; display:block;">Show Format</label>
+                    <select id="podcast-format" class="form-control">
+                        <option value="deep_dive">🔬 The Deep Dive</option>
+                        <option value="rapid_fire">⚡ Rapid Fire</option>
+                        <option value="debate">⚔️ The Debate</option>
+                        <option value="storyteller">📖 The Storyteller</option>
+                        <option value="oral_exam">🎓 The Oral Exam</option>
+                    </select>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" id="btn-gen-podcast" style="width:100%; margin-bottom:1.5rem;">
+                &#127897; Generate Podcast Script
+            </button>
+            <div id="podcast-status" style="text-align:center; font-weight:600; color:var(--accent); margin-bottom:1rem;"></div>
+
+            <div id="podcast-player" style="display:none; padding:1.5rem; background:rgba(255,255,255,0.02); border-radius:1.5rem; border:1px solid var(--border-color);">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
+                    <div style="display:flex;align-items:center;gap:0.75rem;">
+                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#8b5cf6);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-a-avatar">A</div>
+                        <div><div style="font-weight:700;font-size:0.9rem;">Host Alex</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-a-label">Waiting...</div></div>
+                    </div>
+                    <div id="podcast-waveform" style="display:flex;gap:3px;align-items:center;height:30px;">
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:24px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:16px;"></span>
+                        <span style="display:inline-block;width:3px;border-radius:2px;background:var(--accent);height:8px;"></span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.75rem;">
+                        <div style="text-align:right;"><div style="font-weight:700;font-size:0.9rem;">Host Blake</div><div style="font-size:0.7rem;color:var(--text-muted);" id="host-b-label">Waiting...</div></div>
+                        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#10b981,#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;" id="host-b-avatar">B</div>
+                    </div>
+                </div>
+
+                <div id="podcast-now-playing" style="text-align:center; padding:1.25rem; background:rgba(0,0,0,0.2); border-radius:1rem; margin-bottom:1.25rem; font-size:1rem; line-height:1.7; min-height:80px; font-style:italic; color:var(--text-main);">Press Play to begin...</div>
+
+                <div style="display:flex;align-items:center;justify-content:center;gap:0.75rem;flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" id="btn-podcast-prev" title="Previous line">&#8676; Prev</button>
+                    <button class="btn btn-primary" id="btn-podcast-play" style="padding:0.85rem 2.5rem;min-width:120px;">&#9654; Play</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-podcast-next" title="Next line">Next &#8677;</button>
+                    <button class="btn" id="btn-third-mic" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:2rem;padding:0.7rem 1.25rem;font-size:0.85rem;cursor:pointer;">&#127908; Third Mic</button>
+                </div>
+
+                <div style="margin-top:1.25rem;">
                     <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem;">
                         <span id="podcast-progress-label">Line 0 / 0</span>
                         <span>Dual-voice synthesis active</span>
@@ -3371,386 +3440,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 })();
 
-// ==========================================
-// PODCAST ENGINE — EVENT BINDING
-// ==========================================
 
-const bindPodcastEvents = () => {
-    let podcastLines = [];   // Array of {host: 'A'|'B', text: string}
-    let podcastIdx = 0;
-    let isPlaying = false;
-    let synth = window.speechSynthesis;
-    let voiceA = null;
-    let voiceB = null;
-    let utteranceTimeout = null;
-
-    const getVoices = () => {
-        const voices = synth.getVoices();
-        if (!voices.length) return;
-        // Try to pick two distinct voices: one female-ish, one male-ish
-        const enVoices = voices.filter(v => v.lang.startsWith('en'));
-        voiceA = enVoices.find(v => /female|woman|girl|zira|susan|samantha|victoria|karen|moira/i.test(v.name)) || enVoices[0] || voices[0];
-        voiceB = enVoices.find(v => v !== voiceA && /male|man|guy|david|daniel|mark|tom|alex|ryan/i.test(v.name)) || enVoices.find(v => v !== voiceA) || voices[0];
-    };
-
-    if (synth.onvoiceschanged !== undefined) synth.onvoiceschanged = getVoices;
-    getVoices();
-
-    const updateHostDisplay = (host) => {
-        const aAvatar = document.getElementById('host-a-avatar');
-        const bAvatar = document.getElementById('host-b-avatar');
-        const aLabel  = document.getElementById('host-a-label');
-        const bLabel  = document.getElementById('host-b-label');
-        if (!aAvatar) return;
-        if (host === 'A') {
-            aAvatar.style.boxShadow = '0 0 0 3px #3b82f6, 0 0 20px rgba(59,130,246,0.5)';
-            bAvatar.style.boxShadow = 'none';
-            if (aLabel) aLabel.textContent = 'Speaking...';
-            if (bLabel) bLabel.textContent = 'Listening';
-        } else {
-            bAvatar.style.boxShadow = '0 0 0 3px #10b981, 0 0 20px rgba(16,185,129,0.5)';
-            aAvatar.style.boxShadow = 'none';
-            if (bLabel) bLabel.textContent = 'Speaking...';
-            if (aLabel) aLabel.textContent = 'Listening';
-        }
-        // Animate waveform
-        const bars = document.querySelectorAll('#podcast-waveform span');
-        bars.forEach((b, i) => {
-            b.style.animation = isPlaying ? `waveBar ${0.4 + i * 0.1}s ease-in-out infinite alternate` : 'none';
-            b.style.background = host === 'A' ? '#3b82f6' : '#10b981';
-        });
-    };
-
-    const speakLine = (idx) => {
-        if (idx >= podcastLines.length) { stopPlayback(); return; }
-        const line = podcastLines[idx];
-        const nowPlaying = document.getElementById('podcast-now-playing');
-        const progressLabel = document.getElementById('podcast-progress-label');
-        const progressBar = document.getElementById('podcast-progress-bar');
-
-        if (nowPlaying) {
-            const hostColor = line.host === 'A' ? '#3b82f6' : '#10b981';
-            const hostName = line.host === 'A' ? 'Alex' : 'Blake';
-            nowPlaying.innerHTML = `<span style="font-size:0.7rem;font-weight:800;color:${hostColor};text-transform:uppercase;letter-spacing:0.1rem;display:block;margin-bottom:0.5rem;">${hostName}</span>${line.text}`;
-        }
-        if (progressLabel) progressLabel.textContent = `Line ${idx + 1} / ${podcastLines.length}`;
-        if (progressBar) progressBar.style.width = `${((idx + 1) / podcastLines.length) * 100}%`;
-
-        updateHostDisplay(line.host);
-
-        synth.cancel();
-        const utt = new SpeechSynthesisUtterance(line.text);
-        utt.voice = line.host === 'A' ? voiceA : voiceB;
-        utt.rate = line.host === 'A' ? 0.95 : 1.0;
-        utt.pitch = line.host === 'A' ? 1.1 : 0.9;
-        utt.volume = 1;
-        utt.onend = () => {
-            if (isPlaying) {
-                podcastIdx = idx + 1;
-                speakLine(podcastIdx);
-            }
-        };
-        synth.speak(utt);
-    };
-
-    const stopPlayback = () => {
-        isPlaying = false;
-        synth.cancel();
-        if (utteranceTimeout) clearTimeout(utteranceTimeout);
-        const playBtn = document.getElementById('btn-podcast-play');
-        if (playBtn) playBtn.innerHTML = '&#9654; Play';
-        const bars = document.querySelectorAll('#podcast-waveform span');
-        bars.forEach(b => b.style.animation = 'none');
-    };
-
-    const startPlayback = () => {
-        isPlaying = true;
-        const playBtn = document.getElementById('btn-podcast-play');
-        if (playBtn) playBtn.innerHTML = '&#9646;&#9646; Pause';
-        getVoices();
-        speakLine(podcastIdx);
-    };
-
-    // Generate podcast script
-    const genBtn = document.getElementById('btn-gen-podcast');
-    if (!genBtn) return;
-
-    genBtn.onclick = async () => {
-        if (AppState.activeSourceIndices.length === 0) return showToast('Select sources first', 'error');
-        const statusEl = document.getElementById('podcast-status');
-        statusEl.textContent = 'Gemini is writing your podcast script...';
-        genBtn.disabled = true;
-
-        const focus = document.getElementById('input-podcast-focus').value;
-        const format = document.getElementById('podcast-format').value;
-        const focusInstruction = focus ? `\nUSER FOCUS: ${focus}\n` : '';
-
-        const formatInstructions = {
-            deep_dive: 'Host Alex and Host Blake have a relaxed, intellectual conversation, going deep into key concepts. Alex explains, Blake asks clarifying questions and pushes back gently.',
-            rapid_fire: 'Host Alex and Host Blake fire facts at each other quickly. Short punchy exchanges. Each line 10-20 words max.',
-            debate: 'Host Alex argues FOR the main concept, Host Blake argues AGAINST or raises counter-points. They interrupt each other with "But wait—" style rebuttals.',
-            storyteller: 'Host Alex narrates the content as a story with characters and plot, Host Blake adds commentary and asks "what happened next?"',
-            oral_exam: 'Host Blake quizzes Host Alex like an oral exam. Blake asks tough questions, Alex must answer correctly from the material.'
-        };
-
-        try {
-            const parts = getActiveContextParts();
-            parts.push({ text: `${focusInstruction}Generate a 20-line study podcast script about the provided source material. Format: "${formatInstructions[format] || formatInstructions.deep_dive}"\n\nReturn ONLY raw JSON, no markdown:\n{"lines":[{"host":"A","text":"Host Alex dialogue here"},{"host":"B","text":"Host Blake dialogue here"}]}` });
-            const res = await callGemini(parts, 'You are a podcast script writer. Use natural speech, filler words like "um" and "you know", and make it engaging. Return ONLY raw JSON.', null, 'application/json');
-            const data = parseJsonSafe(res);
-            podcastLines = data.lines || [];
-            podcastIdx = 0;
-
-            // Show UI
-            document.getElementById('podcast-player').style.display = 'block';
-            document.getElementById('podcast-script-preview').style.display = 'block';
-            const scriptEl = document.getElementById('podcast-script-text');
-            if (scriptEl) scriptEl.textContent = podcastLines.map(l => `[${l.host === 'A' ? 'Alex' : 'Blake'}]: ${l.text}`).join('\n\n');
-
-            statusEl.textContent = '';
-            genBtn.disabled = false;
-            showToast(`Podcast ready! ${podcastLines.length} lines generated.`, 'success');
-        } catch (e) {
-            statusEl.textContent = e.message;
-            genBtn.disabled = false;
-        }
-    };
-
-    // Play/Pause button
-    document.addEventListener('click', (e) => {
-        if (e.target.id === 'btn-podcast-play' || e.target.closest('#btn-podcast-play')) {
-            if (podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
-            if (isPlaying) stopPlayback();
-            else startPlayback();
-        }
-        if (e.target.id === 'btn-podcast-prev' || e.target.closest('#btn-podcast-prev')) {
-            if (podcastIdx > 0) { podcastIdx--; if (isPlaying) speakLine(podcastIdx); }
-        }
-        if (e.target.id === 'btn-podcast-next' || e.target.closest('#btn-podcast-next')) {
-            if (podcastIdx < podcastLines.length - 1) { podcastIdx++; if (isPlaying) speakLine(podcastIdx); }
-        }
-        if (e.target.id === 'btn-third-mic' || e.target.closest('#btn-third-mic')) {
-            if (podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
-            stopPlayback();
-            document.getElementById('third-mic-panel').style.display = 'block';
-            document.getElementById('third-mic-panel').scrollIntoView({ behavior: 'smooth' });
-        }
-        if (e.target.id === 'btn-third-mic-cancel') {
-            document.getElementById('third-mic-panel').style.display = 'none';
-            document.getElementById('third-mic-response').style.display = 'none';
-        }
-        if (e.target.id === 'btn-third-mic-submit') {
-            const question = document.getElementById('third-mic-input').value;
-            if (!question) return showToast('Type your question first!', 'error');
-            const responseDiv = document.getElementById('third-mic-response');
-            responseDiv.style.display = 'block';
-            responseDiv.textContent = 'Hosts are improvising a response...';
-            const ctx = podcastLines.slice(Math.max(0, podcastIdx - 3), podcastIdx).map(l => `${l.host === 'A' ? 'Alex' : 'Blake'}: ${l.text}`).join('\n');
-            callGemini([{ text: `The podcast was just discussing:\n${ctx}\n\nA listener interrupted and asked: "${question}"\n\nWrite a 3-line improvised response from Host Alex (A) and Host Blake (B) answering this question before returning to the topic. Return ONLY raw JSON:\n{"response":[{"host":"A","text":"..."},{"host":"B","text":"..."},{"host":"A","text":"Anyway, back to..."}]}` }], 'Podcast host improvising a live answer.', null, 'application/json')
-            .then(res => {
-                const data = parseJsonSafe(res);
-                const insertLines = data.response || [];
-                responseDiv.innerHTML = insertLines.map(l => `<div style="margin-bottom:0.5rem;"><strong style="color:${l.host==='A'?'#3b82f6':'#10b981'}">${l.host==='A'?'Alex':'Blake'}:</strong> ${l.text}</div>`).join('');
-                // Insert the improvised lines at current position
-                podcastLines.splice(podcastIdx, 0, ...insertLines);
-                document.getElementById('third-mic-input').value = '';
-                setTimeout(() => {
-                    document.getElementById('third-mic-panel').style.display = 'none';
-                    startPlayback();
-                }, 2000);
-            }).catch(err => { responseDiv.textContent = err.message; });
-        }
-    });
-};
-
-// Patch navigate to bind podcast events
-const _origNavigate = window.navigate;
-window.navigate = (route) => {
-    _origNavigate(route);
-    if (route === 'podcast') {
-        // Small delay to let DOM render
-        setTimeout(bindPodcastEvents, 100);
-    }
-};
-
-// ==========================================
-// KNOWLEDGE MAP — FORCE-DIRECTED SVG RENDERER
-// ==========================================
-
-window.renderKnowledgeMap = (container, graph) => {
-    const W = container.offsetWidth || 800;
-    const H = 500;
-    const nodes = graph.nodes || [];
-    const edges = graph.edges || [];
-
-    // Simple force-directed layout: iterative relaxation
-    nodes.forEach((n, i) => {
-        n.x = W / 2 + (Math.cos(i / nodes.length * Math.PI * 2) * W * 0.35);
-        n.y = H / 2 + (Math.sin(i / nodes.length * Math.PI * 2) * H * 0.35);
-        n.vx = 0; n.vy = 0;
-        n.r = 18 + (n.importance || 3) * 5;
-    });
-
-    // Run 80 iterations of force simulation
-    for (let iter = 0; iter < 80; iter++) {
-        // Repulsion
-        nodes.forEach(a => {
-            nodes.forEach(b => {
-                if (a === b) return;
-                const dx = a.x - b.x, dy = a.y - b.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                const force = 4000 / (dist * dist);
-                a.vx += (dx / dist) * force;
-                a.vy += (dy / dist) * force;
-            });
-        });
-        // Attraction along edges
-        edges.forEach(e => {
-            const a = nodes.find(n => n.id === e.from);
-            const b = nodes.find(n => n.id === e.to);
-            if (!a || !b) return;
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const force = (dist - 150) * 0.03;
-            a.vx += (dx / dist) * force;
-            a.vy += (dy / dist) * force;
-            b.vx -= (dx / dist) * force;
-            b.vy -= (dy / dist) * force;
-        });
-        // Apply velocity with damping and bounds
-        nodes.forEach(n => {
-            n.x = Math.max(n.r, Math.min(W - n.r, n.x + n.vx * 0.1));
-            n.y = Math.max(n.r, Math.min(H - n.r, n.y + n.vy * 0.1));
-            n.vx *= 0.8; n.vy *= 0.8;
-        });
-    }
-
-    const colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4','#ec4899'];
-
-    const svgEdges = edges.map(e => {
-        const a = nodes.find(n => n.id === e.from);
-        const b = nodes.find(n => n.id === e.to);
-        if (!a || !b) return '';
-        const edgeColor = e.type === 'conflict' ? '#ef4444' : 'rgba(255,255,255,0.2)';
-        const midX = (a.x + b.x) / 2;
-        const midY = (a.y + b.y) / 2 - 15;
-        return `
-            <line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${edgeColor}" stroke-width="1.5" stroke-dasharray="${e.type === 'conflict' ? '5,3' : 'none'}" opacity="0.6"/>
-            <text x="${midX}" y="${midY}" fill="rgba(255,255,255,0.4)" font-size="9" text-anchor="middle" font-family="Inter,sans-serif">${e.label || ''}</text>
-        `;
-    }).join('');
-
-    const svgNodes = nodes.map((n, i) => {
-        const color = colors[i % colors.length];
-        const escaped = (n.label || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const words = escaped.split(' ');
-        const line1 = words.slice(0, Math.ceil(words.length / 2)).join(' ');
-        const line2 = words.slice(Math.ceil(words.length / 2)).join(' ');
-        return `
-            <g class="km-node" data-idx="${i}" style="cursor:pointer;" onclick="window.kmDrillNode(${i})">
-                <circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-width="2"/>
-                <text x="${n.x}" y="${n.y - (line2 ? 6 : 0)}" text-anchor="middle" fill="white" font-size="${Math.max(9, n.r * 0.55)}" font-weight="600" font-family="Inter,sans-serif">${line1}</text>
-                ${line2 ? `<text x="${n.x}" y="${n.y + n.r * 0.55}" text-anchor="middle" fill="white" font-size="${Math.max(8, n.r * 0.5)}" font-family="Inter,sans-serif">${line2}</text>` : ''}
-            </g>
-        `;
-    }).join('');
-
-    container.innerHTML = `
-        <div style="position:relative;">
-            <svg width="${W}" height="${H}" style="background:rgba(0,0,0,0.2);border-radius:1rem;overflow:visible;">
-                <defs>
-                    <filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-                </defs>
-                ${svgEdges}
-                ${svgNodes}
-            </svg>
-            <div id="km-drill-panel" style="display:none;margin-top:1.5rem;padding:1.5rem;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);border-radius:1rem;">
-                <h4 id="km-drill-title" style="color:var(--accent);margin-bottom:0.75rem;"></h4>
-                <p id="km-drill-desc" style="color:var(--text-muted);font-size:0.9rem;margin-bottom:1rem;"></p>
-                <div id="km-drill-content" class="markdown-body" style="font-size:0.9rem;"></div>
-            </div>
-        </div>
-        <p style="text-align:center;color:var(--text-muted);font-size:0.8rem;margin-top:1rem;">Click any node to drill into details</p>
-    `;
-
-    window._kmGraph = graph;
-};
-
-window.kmDrillNode = async (idx) => {
-    const graph = window._kmGraph;
-    if (!graph) return;
-    const node = graph.nodes[idx];
-    if (!node) return;
-    const panel = document.getElementById('km-drill-panel');
-    const title = document.getElementById('km-drill-title');
-    const desc = document.getElementById('km-drill-desc');
-    const content = document.getElementById('km-drill-content');
-    if (!panel) return;
-    panel.style.display = 'block';
-    title.textContent = `Deep Dive: ${node.label}`;
-    desc.textContent = node.description || '';
-    content.innerHTML = '<p style="color:var(--text-muted)">Loading AI analysis...</p>';
-    try {
-        const res = await callGemini([{ text: `Concept: "${node.label}"\nContext: ${node.description || 'Key concept from study material'}\n\nProvide a concise expert-level deep-dive explanation with sub-components, real-world examples, and why this concept matters. Format in clear Markdown.` }], 'Expert knowledge analyst.');
-        content.innerHTML = marked.parse(res);
-    } catch (e) {
-        content.innerHTML = `<p style="color:var(--error)">${e.message}</p>`;
-    }
-    panel.scrollIntoView({ behavior: 'smooth' });
-};
-
-// ==========================================
-// REDACTION GAME — AI VALIDATION UPGRADE
-// ==========================================
-
-window.validateRedaction = async () => {
-    const textPanel = document.getElementById('blur-text-panel');
-    const statusEl = document.getElementById('blur-status');
-    if (!textPanel) return;
-
-    const words = textPanel.querySelectorAll('.fluff-word');
-    const kept = [], deleted = [];
-    words.forEach(w => {
-        if (w.classList.contains('deleted')) deleted.push(w.textContent);
-        else kept.push(w.textContent);
-    });
-
-    if (kept.length === 0) return showToast('Nothing left! Keep some words.', 'error');
-    const keptText = kept.join(' ');
-    const total = words.length;
-    const delCount = deleted.length;
-    const reductionPct = Math.round((delCount / total) * 100);
-
-    statusEl.textContent = 'Gemini is scoring your redaction...';
-
-    try {
-        const fullText = Array.from(words).map(w => w.textContent).join(' ');
-        const res = await callGemini([{ text: `ORIGINAL TEXT:\n${fullText}\n\nUSER KEPT:\n${keptText}\n\nUSER DELETED: ${deleted.join(', ')}\n\nEvaluate the user's redaction. Did they keep the core meaning? Did they accidentally delete critical keywords?\n\nReturn ONLY raw JSON: {"score":0-100,"corePreserved":true,"criticalDeleted":["word1","word2"],"feedback":"brief feedback","goldStar":false}` }], 'You are a semantic compression evaluator. A gold star means the user preserved full meaning in 30% fewer words.', null, 'application/json');
-        const data = parseJsonSafe(res);
-
-        // Highlight critical deleted words in red
-        words.forEach(w => {
-            if (w.classList.contains('deleted') && data.criticalDeleted && data.criticalDeleted.some(c => c.toLowerCase() === w.textContent.toLowerCase())) {
-                w.style.background = 'rgba(239,68,68,0.3)';
-                w.style.color = '#ef4444';
-                w.style.textDecoration = 'line-through';
-            }
-        });
-
-        const scoreColor = data.score >= 80 ? 'var(--success)' : data.score >= 50 ? '#f59e0b' : '#ef4444';
-        const scoreEl = document.getElementById('redaction-score');
-        if (scoreEl) {
-            scoreEl.innerHTML = `
-                <div style="font-size:1.5rem;font-weight:800;color:${scoreColor}">
-                    ${data.goldStar ? '⭐ GOLD STAR! ' : ''}Reduction: ${reductionPct}% | Score: ${data.score}/100
-                </div>
-                <div style="font-size:0.9rem;color:var(--text-muted);margin-top:0.5rem;">${data.feedback}</div>
-                ${data.criticalDeleted && data.criticalDeleted.length ? `<div style="font-size:0.8rem;color:#ef4444;margin-top:0.5rem;">⚠️ Critical words deleted: ${data.criticalDeleted.join(', ')}</div>` : '<div style="font-size:0.8rem;color:var(--success);margin-top:0.5rem;">✅ No critical concepts lost!</div>'}
-            `;
-            if (data.goldStar) scoreEl.style.color = 'gold';
-        }
-        statusEl.textContent = '';
-    } catch (e) {
-        statusEl.textContent = e.message;
-    }
-};

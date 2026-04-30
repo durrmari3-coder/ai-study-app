@@ -12,32 +12,52 @@ window.generateStudio = async (type) => {
     // Check if we have active sources, if not, use all notebook sources
     let activeIndices = window.AppState.activeSourceIndices;
     if (!activeIndices || activeIndices.length === 0) {
-        // Auto-select all sources in the notebook for the generation
         const docCount = window.AppState.documents.length;
         if (docCount === 0) return window.showToast("Add sources to your notebook first", "error");
         activeIndices = Array.from({length: docCount}, (_, i) => i);
         window.AppState.activeSourceIndices = activeIndices;
     }
 
-    const focus = prompt(\`What should the \${type} focus on?\`, "General Overview");
-    if (focus === null) return; // User cancelled
+    const focus = prompt(`What should the ${type} focus on?`, "General Overview");
+    if (focus === null) return; 
     
     const complexity = "medium";
     const count = 5;
     
-    // Show loading in the right panel
+    // Determine target containers
+    let targetOutputId = "studio-quick-content";
+    let targetTileId = "studio-quick-result";
+    let tileContentId = "";
+
+    if (type === 'presentation') {
+        targetOutputId = "video-outputs";
+        tileContentId = "video-content";
+    } else if (type === 'knowledgemap') {
+        targetOutputId = "mindmap-outputs";
+        tileContentId = "mindmap-content";
+    } else {
+        targetOutputId = "reports-outputs";
+        tileContentId = "reports-content";
+    }
+
+    const resultContent = document.getElementById(targetOutputId) || document.getElementById('studio-quick-content');
     const resultPanel = document.getElementById('studio-quick-result');
-    const resultType = document.getElementById('studio-quick-type');
-    const resultContent = document.getElementById('studio-quick-content');
     
-    if (resultPanel) resultPanel.style.display = 'block';
-    if (resultType) resultType.textContent = \`Generating \${type}...\`;
-    if (resultContent) resultContent.innerHTML = \`<div style="text-align:center; padding: 2rem;"><ion-icon name="hourglass-outline" class="spin" style="font-size:2rem; color:var(--accent);"></ion-icon><p>Analyzing sources...</p></div>\`;
+    if (tileContentId && window.toggleStudioTile) {
+        window.toggleStudioTile(tileContentId, true);
+    } else if (resultPanel) {
+        resultPanel.style.display = 'block';
+    }
+
+    if (resultContent) {
+        resultContent.innerHTML = `<div style="text-align:center; padding: 1.5rem;"><ion-icon name="hourglass-outline" class="spin" style="font-size:1.5rem; color:var(--accent);"></ion-icon><p style="font-size:0.8rem; margin-top:0.5rem;">Analyzing sources...</p></div>`;
+        resultContent.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
     
     try {
         const parts = window.getActiveContextParts ? window.getActiveContextParts() : [{text:"No context"}];
-        const complexityInstruction = "[MEDIUM: Standard academic level.]\\n";
-        const focusInstruction = focus ? \`\\nUSER FOCUS INSTRUCTION: \${focus}\\n\` : '';
+        const complexityInstruction = "[MEDIUM: Standard academic level.]\n";
+        const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
         
         let outputHtml = "";
         let rawContent = null;
@@ -48,25 +68,22 @@ window.generateStudio = async (type) => {
             const deck = window.parseJsonSafe ? window.parseJsonSafe(res) : JSON.parse(res);
             deck.date = new Date().toISOString();
             
-            // Format presentation HTML
             outputHtml = `<div class="presentation-slides">`;
             deck.slides.forEach((s, idx) => {
                 outputHtml += `
-                <div class="glass-panel" style="margin-bottom:1rem; padding:1.5rem; position:relative;">
-                    <button class="panel-icon-btn" style="position:absolute; top:1rem; right:1rem;" onclick="window.narrateSlide(this)" data-text="${s.title}. ${s.subtitle}. ${s.content}. ${s.bullets.join('. ')}">
+                <div class="glass-panel" style="margin-bottom:0.75rem; padding:1.25rem; position:relative; background:rgba(255,255,255,0.03);">
+                    <button class="panel-icon-btn" style="position:absolute; top:0.75rem; right:0.75rem;" onclick="window.narrateSlide(this)" data-text="${s.title}. ${s.subtitle}. ${s.content}. ${s.bullets.join('. ')}">
                         <ion-icon name="volume-high-outline"></ion-icon>
                     </button>
-                    <h3 style="color:var(--accent);margin-bottom:0.2rem;max-width:90%;">Slide ${idx+1}: ${s.title}</h3>
-                    <h4 style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem;">${s.subtitle}</h4>
-                    <p style="font-size:0.9rem;margin-bottom:1rem;">${s.content}</p>
-                    <ul style="padding-left:1.5rem;font-size:0.85rem;">
-                        ${s.bullets.map(b => `<li style="margin-bottom:0.25rem;">${b}</li>`).join('')}
+                    <h4 style="color:var(--accent);margin-bottom:0.2rem;max-width:85%;font-size:0.95rem;">Slide ${idx+1}: ${s.title}</h4>
+                    <p style="font-size:0.85rem;margin-bottom:0.75rem;line-height:1.4;">${s.content}</p>
+                    <ul style="padding-left:1.25rem;font-size:0.8rem;color:var(--text-muted);">
+                        ${s.bullets.map(b => `<li style="margin-bottom:0.2rem;">${b}</li>`).join('')}
                     </ul>
                 </div>`;
             });
             outputHtml += `</div>`;
             
-            // Add narration script support
             if (!window.narrateSlide) {
                 window.narrateSlide = (btn) => {
                     window.speechSynthesis.cancel();
@@ -83,15 +100,13 @@ window.generateStudio = async (type) => {
             const res = await window.callGemini(parts, "You are a knowledge graph expert. Return ONLY raw valid JSON.", null, "application/json");
             const graph = window.parseJsonSafe ? window.parseJsonSafe(res) : JSON.parse(res);
             
-            // Create a container for the KM
-            outputHtml = \`<div id="temp-km-container" style="width:100%; height:300px; background:rgba(0,0,0,0.2); border-radius:1rem;"></div>\`;
+            outputHtml = `<div id="temp-km-container" style="width:100%; height:350px; background:rgba(0,0,0,0.2); border-radius:1rem; border:1px solid var(--border-color);"></div>`;
             rawContent = graph;
             
         } else {
-            // Default Mindmap (Mermaid)
-            parts.push({ text: \`\${complexityInstruction}\${focusInstruction}Create a Mermaid graph TD representing a Neural Map / Mind Map of the key concepts in the context. Output raw syntax ONLY. Do NOT use markdown code blocks.\` });
-            const res = await window.callGemini(parts, "Mermaid expert.");
-            outputHtml = \`<div class="mermaid">\${res}</div>\`;
+            parts.push({ text: `${complexityInstruction}${focusInstruction}Create a detailed study insight about the key concepts in the context. Output formatted HTML directly.` });
+            const res = await window.callGemini(parts, "Academic report expert.");
+            outputHtml = `<div class="studio-report-content" style="font-size:0.85rem; line-height:1.6; color:var(--text-muted);">${res}</div>`;
             rawContent = res;
         }
         
@@ -99,10 +114,10 @@ window.generateStudio = async (type) => {
         const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
         if (nb) {
             if (!nb.notes) nb.notes = [];
-            nb.notes.push({
+            nb.notes.unshift({
                 id: Math.random().toString(36).substring(2, 9),
                 type: type,
-                title: \`\${type.charAt(0).toUpperCase() + type.slice(1)}: \${focus}\`,
+                title: `${type.charAt(0).toUpperCase() + type.slice(1)}: ${focus}`,
                 content: rawContent,
                 html: outputHtml,
                 date: new Date().toISOString()
@@ -111,24 +126,19 @@ window.generateStudio = async (type) => {
         }
         
         // Render
-        if (resultType) resultType.textContent = \`\${type.charAt(0).toUpperCase() + type.slice(1)} Ready\`;
         if (resultContent) {
             resultContent.innerHTML = outputHtml;
-            // Post-render init
             if (type === 'knowledgemap' && window.renderKnowledgeMap) {
                 const container = document.getElementById('temp-km-container');
                 if (container) window.renderKnowledgeMap(container, rawContent);
             }
-            if (type !== 'knowledgemap' && type !== 'presentation' && window.mermaid) {
-                mermaid.init(undefined, resultContent.querySelectorAll('.mermaid'));
-            }
         }
         
-        window.showToast(\`\${type} generated and saved to notes!\`, "success");
+        window.showToast(`${type} ready!`, "success");
         
     } catch (e) {
-        if (resultContent) resultContent.innerHTML = \`<div style="color:var(--error); padding:1rem;">Error: \${e.message}</div>\`;
-        if (resultType) resultType.textContent = "Error";
+        if (resultContent) resultContent.innerHTML = `<div style="color:var(--error); padding:1rem; font-size:0.8rem;">Error: ${e.message}</div>`;
+        window.showToast("Generation failed", "error");
     }
 };
 
@@ -143,4 +153,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.generateVideoOverview = () => {
         window.generateStudio('presentation');
     };
+
+    window.generateOverview = window.generateStudio;
 });
