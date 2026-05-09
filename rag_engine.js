@@ -6,7 +6,7 @@
 const RAG_CONFIG = {
     chunkSize: 1000, // characters
     chunkOverlap: 200,
-    embeddingModel: 'text-embedding-004'
+    embeddingModel: 'embedding-001'
 };
 
 /**

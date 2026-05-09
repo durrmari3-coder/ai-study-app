@@ -4,100 +4,105 @@
 // ==========================================
 
 window.renderKnowledgeMap = (container, graph) => {
-    const W = container.offsetWidth || 800;
-    const H = 500;
-    const nodes = graph.nodes || [];
-    const edges = graph.edges || [];
+    container.innerHTML = `
+        <div id="km-viz-container" style="position:relative; width:100%; height:450px; background:rgba(0,0,0,0.3); border-radius:1rem; border:1px solid var(--border-color); overflow:hidden;"></div>
+        <div id="km-drill-panel" style="display:none;margin-top:1.5rem;padding:1.5rem;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);border-radius:1rem;">
+            <h4 id="km-drill-title" style="color:var(--accent);margin-bottom:0.75rem;"></h4>
+            <p id="km-drill-desc" style="color:var(--text-muted);font-size:0.9rem;margin-bottom:1rem;"></p>
+            <div id="km-drill-content" class="markdown-body" style="font-size:0.9rem;"></div>
+        </div>
+        <p style="text-align:center;color:var(--text-muted);font-size:0.8rem;margin-top:1rem;">Scroll to zoom, drag to pan, click nodes for deep dive</p>
+    `;
 
-    // Simple force-directed layout: iterative relaxation
-    nodes.forEach((n, i) => {
-        n.x = W / 2 + (Math.cos(i / nodes.length * Math.PI * 2) * W * 0.35);
-        n.y = H / 2 + (Math.sin(i / nodes.length * Math.PI * 2) * H * 0.35);
-        n.vx = 0; n.vy = 0;
-        n.r = 18 + (n.importance || 3) * 5;
+    const vizBox = document.getElementById('km-viz-container');
+    const width = vizBox.offsetWidth || 500;
+    const height = 450;
+
+    const svg = d3.select("#km-viz-container")
+        .append("svg")
+        .attr("width", "100%")
+        .attr("height", "100%")
+        .attr("viewBox", [0, 0, width, height]);
+
+    const g = svg.append("g");
+
+    svg.call(d3.zoom()
+        .extent([[0, 0], [width, height]])
+        .scaleExtent([0.1, 8])
+        .on("zoom", (event) => g.attr("transform", event.transform)));
+
+    const nodes = graph.nodes.map(d => ({ ...d }));
+    const links = graph.edges.map(d => ({ source: d.from, target: d.to, label: d.label }));
+
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-300))
+        .force("center", d3.forceCenter(width / 2, height / 2));
+
+    const link = g.append("g")
+        .attr("stroke", "rgba(255,255,255,0.15)")
+        .attr("stroke-width", 1.5)
+        .selectAll("line")
+        .data(links)
+        .join("line");
+
+    const node = g.append("g")
+        .selectAll("g")
+        .data(nodes)
+        .join("g")
+        .style("cursor", "pointer")
+        .call(d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended))
+        .on("click", (event, d) => {
+            const idx = graph.nodes.findIndex(n => n.id === d.id);
+            window.kmDrillNode(idx);
+        });
+
+    node.append("circle")
+        .attr("r", d => 15 + (d.importance || 3) * 4)
+        .attr("fill", "rgba(59, 130, 246, 0.15)")
+        .attr("stroke", "var(--accent)")
+        .attr("stroke-width", 2);
+
+    node.append("text")
+        .attr("dy", "0.31em")
+        .attr("x", 0)
+        .attr("y", d => (15 + (d.importance || 3) * 4) + 14)
+        .attr("text-anchor", "middle")
+        .attr("fill", "#fff")
+        .attr("font-size", "10px")
+        .attr("font-weight", "600")
+        .style("pointer-events", "none")
+        .text(d => d.label);
+
+    simulation.on("tick", () => {
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node.attr("transform", d => `translate(${d.x},${d.y})`);
     });
 
-    // Run 80 iterations of force simulation
-    for (let iter = 0; iter < 80; iter++) {
-        // Repulsion
-        nodes.forEach(a => {
-            nodes.forEach(b => {
-                if (a === b) return;
-                const dx = a.x - b.x, dy = a.y - b.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                const force = 4000 / (dist * dist);
-                a.vx += (dx / dist) * force;
-                a.vy += (dy / dist) * force;
-            });
-        });
-        // Attraction along edges
-        edges.forEach(e => {
-            const a = nodes.find(n => n.id === e.from);
-            const b = nodes.find(n => n.id === e.to);
-            if (!a || !b) return;
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const force = (dist - 150) * 0.03;
-            a.vx += (dx / dist) * force;
-            a.vy += (dy / dist) * force;
-            b.vx -= (dx / dist) * force;
-            b.vy -= (dy / dist) * force;
-        });
-        // Apply velocity with damping and bounds
-        nodes.forEach(n => {
-            n.x = Math.max(n.r, Math.min(W - n.r, n.x + n.vx * 0.1));
-            n.y = Math.max(n.r, Math.min(H - n.r, n.y + n.vy * 0.1));
-            n.vx *= 0.8; n.vy *= 0.8;
-        });
+    function dragstarted(event) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        event.subject.fx = event.subject.x;
+        event.subject.fy = event.subject.y;
     }
 
-    const colors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#06b6d4','#ec4899'];
+    function dragged(event) {
+        event.subject.fx = event.x;
+        event.subject.fy = event.y;
+    }
 
-    const svgEdges = edges.map(e => {
-        const a = nodes.find(n => n.id === e.from);
-        const b = nodes.find(n => n.id === e.to);
-        if (!a || !b) return '';
-        const edgeColor = e.type === 'conflict' ? '#ef4444' : 'rgba(255,255,255,0.2)';
-        const midX = (a.x + b.x) / 2;
-        const midY = (a.y + b.y) / 2 - 15;
-        return `
-            <line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${edgeColor}" stroke-width="1.5" stroke-dasharray="${e.type === 'conflict' ? '5,3' : 'none'}" opacity="0.6"/>
-            <text x="${midX}" y="${midY}" fill="rgba(255,255,255,0.4)" font-size="9" text-anchor="middle" font-family="Inter,sans-serif">${e.label || ''}</text>
-        `;
-    }).join('');
-
-    const svgNodes = nodes.map((n, i) => {
-        const color = colors[i % colors.length];
-        const escaped = (n.label || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const words = escaped.split(' ');
-        const line1 = words.slice(0, Math.ceil(words.length / 2)).join(' ');
-        const line2 = words.slice(Math.ceil(words.length / 2)).join(' ');
-        return `
-            <g class="km-node" data-idx="${i}" style="cursor:pointer;" onclick="window.kmDrillNode(${i})">
-                <circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-width="2"/>
-                <text x="${n.x}" y="${n.y - (line2 ? 6 : 0)}" text-anchor="middle" fill="white" font-size="${Math.max(9, n.r * 0.55)}" font-weight="600" font-family="Inter,sans-serif">${line1}</text>
-                ${line2 ? `<text x="${n.x}" y="${n.y + n.r * 0.55}" text-anchor="middle" fill="white" font-size="${Math.max(8, n.r * 0.5)}" font-family="Inter,sans-serif">${line2}</text>` : ''}
-            </g>
-        `;
-    }).join('');
-
-    container.innerHTML = `
-        <div style="position:relative;">
-            <svg width="${W}" height="${H}" style="background:rgba(0,0,0,0.2);border-radius:1rem;overflow:visible;">
-                <defs>
-                    <filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-                </defs>
-                ${svgEdges}
-                ${svgNodes}
-            </svg>
-            <div id="km-drill-panel" style="display:none;margin-top:1.5rem;padding:1.5rem;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);border-radius:1rem;">
-                <h4 id="km-drill-title" style="color:var(--accent);margin-bottom:0.75rem;"></h4>
-                <p id="km-drill-desc" style="color:var(--text-muted);font-size:0.9rem;margin-bottom:1rem;"></p>
-                <div id="km-drill-content" class="markdown-body" style="font-size:0.9rem;"></div>
-            </div>
-        </div>
-        <p style="text-align:center;color:var(--text-muted);font-size:0.8rem;margin-top:1rem;">Click any node to drill into details</p>
-    `;
+    function dragended(event) {
+        if (!event.active) simulation.alphaTarget(0);
+        event.subject.fx = null;
+        event.subject.fy = null;
+    }
 
     window._kmGraph = graph;
 };

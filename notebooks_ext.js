@@ -110,12 +110,34 @@ const generateId = () => Math.random().toString(36).substring(2, 15);
 window.createNotebook = () => {
     const limit = window.AppState.userTier === 'plus' ? 500 : 100;
     if (window.AppState.notebooks.length >= limit) {
-        alert(`You have reached the ${limit} notebook limit for your tier.`);
+        window.showToast(`You have reached the ${limit} notebook limit for your tier.`, "warning");
         return;
     }
     
-    const title = prompt("Enter notebook name:", "New Research Project");
+    if (window.showModal) {
+        window.showModal('Create Notebook', `
+            <div style="display:flex; flex-direction:column; gap:1rem;">
+                <input type="text" id="new-nb-title" class="form-control" value="New Research Project" placeholder="Notebook Title">
+                <button class="btn btn-primary" onclick="window.confirmCreateNotebook()">Create Project</button>
+            </div>
+        `);
+    } else {
+        // Fallback
+        const t = prompt("Enter notebook name:", "New Research Project");
+        if(t) {
+            document.body.insertAdjacentHTML('beforeend', `<input type="hidden" id="new-nb-title" value="${t}">`);
+            window.confirmCreateNotebook();
+        }
+    }
+};
+
+window.confirmCreateNotebook = () => {
+    const titleEl = document.getElementById('new-nb-title');
+    if (!titleEl) return;
+    const title = titleEl.value.trim();
     if (!title) return;
+    
+    if (window.closeModal) window.closeModal();
     
     const emojis = ['📓', '🧠', '🔬', '📚', '⚡', '💡', '📊', '🌐', '🔭', '🧬'];
     const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
@@ -140,6 +162,7 @@ window.createNotebook = () => {
     
     window.AppState.notebooks.push(newNb);
     if (window.idbKeyval) window.idbKeyval.set('lumina_notebooks', window.AppState.notebooks);
+    window.saveState('notebooks', window.AppState.notebooks); // Ensure state is saved properly
     
     // Firestore Sync
     if (window.auth && window.auth.currentUser && window.db) {
@@ -151,36 +174,44 @@ window.createNotebook = () => {
     window.setActiveNotebook(newNb.id);
 };
 
-// Duplicate Notebook
-window.duplicateNotebook = (id) => {
-    const idx = window.AppState.notebooks.findIndex(n => n.id === id);
-    if (idx > -1) {
-        const original = window.AppState.notebooks[idx];
-        const copy = JSON.parse(JSON.stringify(original));
-        copy.id = generateId();
-        copy.title = original.title + " (Copy)";
-        copy.createdAt = new Date().toISOString();
-        copy.updatedAt = new Date().toISOString();
-        window.AppState.notebooks.splice(idx + 1, 0, copy);
-        window.saveState('notebooks', window.AppState.notebooks);
-        window.navigate('notebooks');
-        
-        // Firestore Sync
-        if (window.auth && window.auth.currentUser && window.db) {
-            import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js").then(({ doc, setDoc }) => {
-                setDoc(doc(window.db, `users/${window.auth.currentUser.uid}/notebooks`, copy.id), copy, { merge: true }).catch(e => console.warn(e));
-            });
-        }
-    }
-};
+
 
 // Rename Notebook
 window.renameNotebook = (id) => {
     const nb = window.AppState.notebooks.find(n => n.id === id);
     if (!nb) return;
-    const newTitle = prompt("Enter new notebook name:", nb.title);
-    if (newTitle && newTitle.trim() !== "") {
-        nb.title = newTitle.trim();
+    
+    if (window.showModal) {
+        window.showModal('Rename Notebook', `
+            <div style="display:flex; flex-direction:column; gap:1rem;">
+                <input type="hidden" id="rename-nb-id" value="${id}">
+                <input type="text" id="rename-nb-title" class="form-control" value="${nb.title}">
+                <button class="btn btn-primary" onclick="window.confirmRenameNotebook()">Save</button>
+            </div>
+        `);
+    } else {
+        const newTitle = prompt("Enter new notebook name:", nb.title);
+        if (newTitle && newTitle.trim() !== "") {
+            document.body.insertAdjacentHTML('beforeend', `<input type="hidden" id="rename-nb-id" value="${id}"><input type="hidden" id="rename-nb-title" value="${newTitle}">`);
+            window.confirmRenameNotebook();
+        }
+    }
+};
+
+window.confirmRenameNotebook = () => {
+    const idEl = document.getElementById('rename-nb-id');
+    const titleEl = document.getElementById('rename-nb-title');
+    if (!idEl || !titleEl) return;
+    
+    const id = idEl.value;
+    const newTitle = titleEl.value.trim();
+    if (!newTitle) return;
+    
+    if (window.closeModal) window.closeModal();
+    
+    const nb = window.AppState.notebooks.find(n => n.id === id);
+    if (nb) {
+        nb.title = newTitle;
         nb.updatedAt = new Date().toISOString();
         window.saveState('notebooks', window.AppState.notebooks);
         window.navigate('notebooks');
@@ -194,7 +225,8 @@ window.duplicateNotebook = (id) => {
     
     const limit = window.AppState.userTier === 'plus' ? 500 : 100;
     if (window.AppState.notebooks.length >= limit) {
-        alert(`You have reached the ${limit} notebook limit for your tier.`);
+        if (window.showToast) window.showToast(`You have reached the ${limit} notebook limit for your tier.`, "warning");
+        else alert(`You have reached the ${limit} notebook limit for your tier.`);
         return;
     }
     
@@ -323,49 +355,7 @@ window.initiateNotebookSync = async (id) => {
     }
 };
 
-window.shareNotebook = async (id) => {
-    if (!window.auth?.currentUser) return window.showToast("Sign in to share notebooks.", "error");
-    
-    const nb = window.AppState.notebooks.find(n => n.id === id);
-    if (!nb) return;
 
-    try {
-        const { collection, addDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
-        
-        showToast("Generating share link...");
-        
-        const shareData = {
-            notebookId: id,
-            ownerId: window.auth.currentUser.uid,
-            ownerName: window.auth.currentUser.displayName || 'Lumina User',
-            title: nb.title,
-            createdAt: serverTimestamp(),
-            role: 'viewer' // Default to public viewer
-        };
-
-        const docRef = await addDoc(collection(window.db, "shares"), shareData);
-        const shareUrl = `${window.location.origin}${window.location.pathname}?share=${docRef.id}`;
-        
-        window.showModal('Share Notebook', `
-            <div style="text-align:center;">
-                <p style="margin-bottom:1.5rem; color:var(--text-muted);">Anyone with this link can view and clone this notebook.</p>
-                <div class="glass-panel" style="padding:1rem; background:rgba(0,0,0,0.3); border-radius:1rem; display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem;">
-                    <input type="text" value="${shareUrl}" readonly class="form-control" style="background:transparent; border:none; color:var(--accent); font-family:monospace; font-size:0.8rem;">
-                    <button class="btn btn-sm btn-primary" onclick="navigator.clipboard.writeText('${shareUrl}'); window.showToast('Link copied!')">Copy</button>
-                </div>
-                <div style="font-size:0.8rem; color:var(--text-muted);">Shared as: <span style="color:var(--success); font-weight:700;">Public Community Resource</span></div>
-            </div>
-        `);
-        
-        // Update notebook state to reflect it is shared
-        nb.isShared = true;
-        nb.shareId = docRef.id;
-        window.saveState('notebooks', window.AppState.notebooks);
-
-    } catch (e) {
-        window.showToast("Sharing failed: " + e.message, "error");
-    }
-};
 
 // Workspace Notes Tab Toggle
 window.toggleWorkspaceTab = (tab) => {
@@ -388,30 +378,6 @@ window.updateNotebookConfig = (key, val) => {
     window.showToast(`Updated notebook ${key}: ${val}`, "success");
     // No need to navigate, just keep panel open or closed based on UX. 
     // Actually, usually users change one and keep it open.
-};
-
-window.saveChatToNotes = (chatIdx) => {
-    const nb = window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId);
-    if (!nb) return;
-    
-    const msg = window.AppState.chatHistory[chatIdx];
-    if (!msg) return;
-    
-    const titlePrompt = prompt("Enter a title for this note:", "Saved AI Response");
-    if (!titlePrompt) return; // cancelled
-    
-    if (!nb.notes) nb.notes = [];
-    nb.notes.push({
-        id: generateId(),
-        title: titlePrompt,
-        content: msg.content,
-        html: window.marked ? window.marked.parse(msg.content) : msg.content,
-        date: new Date().toISOString()
-    });
-    
-    window.saveState('notebooks', window.AppState.notebooks);
-    window.showToast("Note saved to workspace!", "success");
-    window.navigate('notebook'); // re-render
 };
 
 window.editNote = (noteIdx) => {
@@ -580,10 +546,61 @@ window.bulkPinNotebooks = () => {
     window.navigate('notebooks');
 };
 
-// Auto-navigate to notebooks on load if we are on dashboard
-setTimeout(() => {
-    if (window.currentRoute === 'dashboard') {
-        window.navigate('notebooks');
-    }
-}, 500);
+// CHAT CONFIG & MODES
+window.setChatMode = (mode) => {
+    window.AppState.chatMode = mode;
+    window.showToast("Chat mode set to: " + mode.replace('_', ' '), "info");
+    if (window.navigate) window.navigate('notebook');
+};
 
+window.showChatConfigModal = () => {
+    const tone = window.AppState.chatTone || 'neutral';
+    const length = window.AppState.chatLength || 'default';
+    const persona = window.AppState.chatPersona || '';
+
+    window.showModal('AI Chat Configuration', `
+        <div style="display:flex; flex-direction:column; gap:1.2rem;">
+            <div>
+                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Response Length</label>
+                <select id="config-length" class="form-control" style="width:100%;">
+                    <option value="short" ${length === 'short' ? 'selected' : ''}>Short & Concise</option>
+                    <option value="default" ${length === 'default' ? 'selected' : ''}>Default</option>
+                    <option value="detailed" ${length === 'detailed' ? 'selected' : ''}>Detailed & Comprehensive</option>
+                </select>
+            </div>
+            <div>
+                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Tone</label>
+                <select id="config-tone" class="form-control" style="width:100%;">
+                    <option value="formal" ${tone === 'formal' ? 'selected' : ''}>Formal / Academic</option>
+                    <option value="neutral" ${tone === 'neutral' ? 'selected' : ''}>Neutral</option>
+                    <option value="casual" ${tone === 'casual' ? 'selected' : ''}>Casual / Friendly</option>
+                </select>
+            </div>
+            <div>
+                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">AI Persona (Optional)</label>
+                <input type="text" id="config-persona" class="form-control" placeholder="e.g. Socratic Tutor, Harsh Critic" value="${persona}" style="width:100%;">
+            </div>
+            <button class="btn btn-primary" onclick="window.saveChatConfig()" style="margin-top:0.5rem;">Save Configuration</button>
+        </div>
+    `);
+};
+
+window.saveChatConfig = () => {
+    window.AppState.chatLength = document.getElementById('config-length').value;
+    window.AppState.chatTone = document.getElementById('config-tone').value;
+    window.AppState.chatPersona = document.getElementById('config-persona').value.trim();
+    window.closeModal();
+    window.showToast("Chat configuration saved", "success");
+};
+
+window.clearChatHistory = async () => {
+    if (confirm("Are you sure you want to clear this notebook's chat history?")) {
+        window.AppState.chatHistory = [];
+        const nb = window.AppState.activeNotebookId ? window.AppState.notebooks.find(n => n.id === window.AppState.activeNotebookId) : null;
+        if (nb) {
+            nb.chatHistory = [];
+            if (window.saveState) await window.saveState('notebooks', window.AppState.notebooks);
+        }
+        if (window.navigate) window.navigate('notebook');
+    }
+};

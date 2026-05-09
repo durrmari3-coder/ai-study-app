@@ -13,7 +13,7 @@
     --radius-xl: 2rem;
     --panel-width-sources: 280px;
     --panel-width-studio: 320px;
-    --icon-nav-width: 64px;
+    --icon-nav-width: 72px;
 }
 
 /* Light Mode */
@@ -319,7 +319,7 @@ select.form-control option { background: var(--bg-color); color: var(--text-main
 .modal-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2000; display: flex; align-items: center; justify-content: center; opacity: 1; transition: opacity 0.3s; }
 .modal-container.hidden { opacity: 0; pointer-events: none; }
 .modal-backdrop { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.5); backdrop-filter: blur(10px); }
-.modal-content { position: relative; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 1rem; padding: 3rem; width: 95%; max-width: 700px; box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6); z-index: 10; max-height: 85vh; overflow-y: auto; backdrop-filter: blur(24px); }
+.modal-content { position: relative; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 1rem; width: 95%; max-width: 700px; box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6); z-index: 10; max-height: 85vh; overflow: hidden; backdrop-filter: blur(24px); display: flex; flex-direction: column; }
 .close-modal { position: absolute; top: 2rem; right: 2rem; cursor: pointer; font-size: 2rem; color: var(--text-muted); transition: all 0.2s; }
 .close-modal:hover { color: var(--accent); transform: rotate(90deg); }
 
@@ -1612,3 +1612,806 @@ select.form-control option { background: var(--bg-color); color: var(--text-main
     cursor: pointer;
     backdrop-filter: blur(10px);
 }
+
+/* ============================================================
+   PHASE A — THREE-PANEL NOTEBOOK WORKSPACE
+   ============================================================ */
+
+/* The outer workspace shell in notebook mode */
+#workspace.notebook-mode {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+#workspace.notebook-mode #view-container {
+    flex: 1;
+    overflow: hidden;
+    padding: 0;
+}
+
+/* The 3-panel layout container */
+.notebook-workspace {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+
+/* ---- Panel: Sources (Left) ---- */
+.nb-panel-sources {
+    width: var(--panel-width-sources, 280px);
+    min-width: 180px;
+    max-width: 500px;
+    display: flex;
+    flex-direction: column;
+    background: rgba(10, 15, 28, 0.6);
+    border-right: 1px solid var(--border-color);
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: width 0s; /* no transition during drag */
+}
+
+/* ---- Panel: Chat (Center) ---- */
+.nb-panel-chat {
+    flex: 1;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: transparent;
+    position: relative;
+}
+
+/* ---- Panel: Studio (Right) ---- */
+.nb-panel-studio {
+    width: var(--panel-width-studio, 320px);
+    min-width: 200px;
+    max-width: 580px;
+    display: flex;
+    flex-direction: column;
+    background: rgba(10, 15, 28, 0.6);
+    border-left: 1px solid var(--border-color);
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: width 0s;
+}
+
+/* ---- Resize Handles ---- */
+.panel-resize-handle {
+    width: 4px;
+    flex-shrink: 0;
+    background: transparent;
+    cursor: col-resize;
+    position: relative;
+    z-index: 10;
+    transition: background 0.2s;
+    user-select: none;
+}
+
+.panel-resize-handle:hover,
+.panel-resize-handle.dragging {
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+}
+
+.panel-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: -4px; right: -4px;
+    /* expanded hit area */
+}
+
+/* ---- Panel Headers ---- */
+.nb-panel-header {
+    height: 52px;
+    padding: 0 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.15);
+    flex-shrink: 0;
+    gap: 0.5rem;
+}
+
+.nb-panel-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+}
+
+/* ---- Sources Panel Inner ---- */
+.nb-sources-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+.nb-source-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 0.875rem;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid transparent;
+    position: relative;
+}
+
+.nb-source-item:hover {
+    background: rgba(255,255,255,0.07);
+    border-color: var(--border-color);
+}
+
+.nb-source-item.active {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+.nb-source-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.nb-source-item.active .nb-source-icon { color: var(--accent); }
+
+.nb-source-name {
+    flex: 1;
+    font-size: 0.82rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-main);
+}
+
+.nb-source-del {
+    opacity: 0;
+    transition: opacity 0.2s;
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 0.15rem;
+    border-radius: 0.25rem;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+}
+
+.nb-source-item:hover .nb-source-del { opacity: 1; }
+
+.nb-sources-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.nb-sources-empty ion-icon {
+    font-size: 2.5rem;
+    opacity: 0.3;
+}
+
+.nb-sources-empty p {
+    font-size: 0.82rem;
+    line-height: 1.6;
+    opacity: 0.7;
+}
+
+.nb-sources-footer {
+    padding: 0.75rem;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.nb-add-source-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.7rem;
+    border-radius: 0.75rem;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px dashed rgba(59, 130, 246, 0.3);
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.nb-add-source-btn:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--accent);
+}
+
+/* ---- Chat Panel Inner ---- */
+.nb-chat-header {
+    height: 52px;
+    padding: 0 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.15);
+    flex-shrink: 0;
+}
+
+.nb-notebook-title {
+    flex: 1;
+    font-size: 1rem;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-main);
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.4rem;
+    transition: background 0.2s;
+}
+
+.nb-notebook-title:hover {
+    background: rgba(255,255,255,0.07);
+}
+
+.nb-chat-tabs {
+    display: flex;
+    gap: 0;
+    height: 40px;
+    align-items: flex-end;
+    padding: 0 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
+}
+
+.nb-chat-tab {
+    padding: 0 1rem;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.nb-chat-tab:hover { color: var(--text-main); }
+.nb-chat-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.nb-chat-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+.nb-suggested-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 1.25rem;
+    overflow-x: auto;
+    flex-shrink: 0;
+    scrollbar-width: none;
+}
+
+.nb-suggested-actions::-webkit-scrollbar { display: none; }
+
+.nb-suggest-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.85rem;
+    border-radius: 2rem;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.nb-suggest-btn:hover {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.nb-chat-input-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    border-top: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.2);
+    flex-shrink: 0;
+    align-items: flex-end;
+}
+
+.nb-chat-input {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    color: white;
+    font-size: 0.9rem;
+    font-family: inherit;
+    resize: none;
+    min-height: 42px;
+    max-height: 120px;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+    overflow-y: auto;
+}
+
+.nb-chat-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.nb-chat-send-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 0.75rem;
+    background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    border: none;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.nb-chat-send-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(59, 130, 246, 0.5);
+}
+
+.nb-chat-send-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ---- Notes Grid (inside chat tab) ---- */
+.nb-notes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    padding: 0.25rem;
+}
+
+.nb-note-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 350px;
+    overflow-y: auto;
+}
+
+/* ---- Studio Panel Inner ---- */
+.nb-studio-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+.studio-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.875rem;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid transparent;
+    position: relative;
+    overflow: hidden;
+}
+
+.studio-tile:hover {
+    background: rgba(255,255,255,0.07);
+    border-color: var(--border-color);
+    transform: translateX(3px);
+}
+
+.studio-tile:active {
+    transform: translateX(1px) scale(0.99);
+}
+
+.studio-tile-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 0.625rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+
+.studio-tile-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.studio-tile-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.studio-tile-desc {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.studio-tile-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 2rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+
+.studio-tile-badge.ready {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.studio-tile-badge.idle {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+}
+
+.studio-tile-badge.generating {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.studio-tile.generating::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: shimmer 1.5s linear infinite;
+}
+
+@keyframes shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+}
+
+/* Studio section dividers */
+.studio-section-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    padding: 0.5rem 0.25rem 0.25rem;
+    opacity: 0.6;
+}
+
+/* ---- Citation badge ---- */
+.citation-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: var(--accent);
+    border-radius: 0.35rem;
+    padding: 0 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    vertical-align: super;
+    line-height: 1.4;
+    min-width: 1.2em;
+    text-align: center;
+}
+
+.citation-badge:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+/* Citation tooltip */
+.citation-tooltip {
+    position: fixed;
+    z-index: 3000;
+    max-width: 340px;
+    padding: 0.875rem 1rem;
+    background: rgba(15, 23, 42, 0.97);
+    border: 1px solid var(--accent);
+    border-radius: 0.75rem;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: var(--text-main);
+    pointer-events: none;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    animation: fadeIn 0.15s ease;
+}
+
+/* Panel icon buttons */
+.panel-icon-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5rem;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.1rem;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.panel-icon-btn:hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-main);
+}
+
+/* Source count badge */
+.nb-source-count {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.45rem;
+    border-radius: 2rem;
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+}
+
+/* Responsive: collapse studio on narrow screens */
+@media (max-width: 1100px) {
+    .nb-panel-studio {
+        width: 260px;
+    }
+}
+
+@media (max-width: 900px) {
+    .nb-panel-studio {
+        display: none;
+    }
+    .panel-resize-handle.right-handle {
+        display: none;
+    }
+}
+
+@media (max-width: 680px) {
+    .nb-panel-sources {
+        display: none;
+    }
+    .panel-resize-handle.left-handle {
+        display: none;
+    }
+}
+
+/* Workspace layout for non-notebook routes */
+#workspace:not(.notebook-mode) #view-container {
+    padding: 1.5rem 2.5rem 3rem;
+    overflow-y: auto;
+    height: 100%;
+}
+
+/* Config panel slide-out (existing, kept) */
+.config-panel {
+    position: fixed;
+    top: 0; right: -380px;
+    width: 360px;
+    height: 100vh;
+    z-index: 500;
+    border-radius: 0;
+    border-left: 1px solid var(--border-color);
+    transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+}
+
+.config-panel.open {
+    right: 0;
+    box-shadow: -20px 0 60px rgba(0,0,0,0.5);
+}
+
+/* Spinning icon utility */
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Phase 3 Citation Highlights */
+.citation-highlight {
+    background: rgba(245, 158, 11, 0.3);
+    border-bottom: 2px solid var(--accent);
+    border-radius: 2px;
+    padding: 0 2px;
+    animation: citation-pulse 2s infinite ease-in-out;
+}
+
+@keyframes citation-pulse {
+    0% { background: rgba(245, 158, 11, 0.3); }
+    50% { background: rgba(245, 158, 11, 0.6); }
+    100% { background: rgba(245, 158, 11, 0.3); }
+}
+
+/* Studio Insights Toggle */
+.nb-studio-nav {
+    display: flex;
+    background: rgba(255,255,255,0.05);
+    padding: 0.25rem;
+    border-radius: 0.5rem;
+    margin: 0 1rem 1rem 1rem;
+}
+
+.nb-studio-nav-btn {
+    flex: 1;
+    padding: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-align: center;
+    border-radius: 0.4rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--text-muted);
+}
+
+.nb-studio-nav-btn.active {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+}
+
+.nb-studio-nav-btn:not(.active):hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-main);
+}
+
+/* ================================================ */
+/* Phase 4 - Studio Workspace & Note Persistence   */
+/* ================================================ */
+
+.error-box {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: 0.75rem;
+    color: #ef4444;
+    padding: 1.5rem;
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+.studio-report-content {
+    padding: 0.5rem 0.25rem;
+    font-size: 0.9rem;
+    line-height: 1.75;
+    color: var(--text-main);
+}
+
+.studio-report-content h1,
+.studio-report-content h2,
+.studio-report-content h3 {
+    color: var(--accent);
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.studio-report-content table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin: 1rem 0;
+}
+
+.studio-report-content th {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.studio-report-content td {
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 0.75rem;
+    vertical-align: top;
+}
+
+.studio-report-content code {
+    background: rgba(255,255,255,0.07);
+    border-radius: 0.25rem;
+    padding: 0.1em 0.35em;
+    font-size: 0.82em;
+}
+
+.presentation-slides {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
+.nb-note-card { transition: box-shadow 0.2s, transform 0.2s; }
+.nb-note-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.3); transform: translateY(-1px); }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; display: inline-block; }

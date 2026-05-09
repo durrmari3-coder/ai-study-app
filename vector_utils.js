@@ -61,16 +61,21 @@ window.scrubPII = (text) => {
 };
 
 // Intercept window.callGemini to scrub PII automatically
-const originalCallGemini = window.callGemini;
-window.callGemini = async (parts, sys, hist, mime, model) => {
-    // Scrub parts
-    const scrubbedParts = parts.map(p => {
-        if (p.text) return { ...p, text: window.scrubPII(p.text) };
-        return p;
-    });
-    
-    // Scrub history
-    const scrubbedHist = hist ? hist.map(h => ({ ...h, content: window.scrubPII(h.content) })) : null;
-    
-    return originalCallGemini(scrubbedParts, window.scrubPII(sys), scrubbedHist, mime, model);
-};
+(function() {
+    const wrap = () => {
+        const originalCallGemini = window.callGemini;
+        if (!originalCallGemini) {
+            setTimeout(wrap, 100);
+            return;
+        }
+        window.callGemini = async (parts, sys, hist, mime, model) => {
+            const scrubbedParts = parts.map(p => {
+                if (p.text) return { ...p, text: window.scrubPII(p.text) };
+                return p;
+            });
+            const scrubbedHist = hist ? hist.map(h => ({ ...h, content: window.scrubPII(h.content) })) : null;
+            return originalCallGemini(scrubbedParts, window.scrubPII(sys), scrubbedHist, mime, model);
+        };
+    };
+    wrap();
+})();

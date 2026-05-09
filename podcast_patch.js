@@ -125,9 +125,11 @@
 // ==========================================
 
 const bindPodcastEvents = () => {
-    let podcastLines = [];   // Array of {host: 'A'|'B', text: string}
-    let podcastIdx = 0;
-    let isPlaying = false;
+    // Ensure AppState podcast variables exist
+    window.AppState.podcastLines = window.AppState.podcastLines || [];
+    window.AppState.podcastIdx = window.AppState.podcastIdx || 0;
+    window.AppState.podcastIsPlaying = false; // Always pause on re-render
+
     let synth = window.speechSynthesis;
     let voiceA = null;
     let voiceB = null;
@@ -165,14 +167,14 @@ const bindPodcastEvents = () => {
         // Animate waveform
         const bars = document.querySelectorAll('#podcast-waveform span');
         bars.forEach((b, i) => {
-            b.style.animation = isPlaying ? `waveBar ${0.4 + i * 0.1}s ease-in-out infinite alternate` : 'none';
+            b.style.animation = AppState.podcastIsPlaying ? `waveBar ${0.4 + i * 0.1}s ease-in-out infinite alternate` : 'none';
             b.style.background = host === 'A' ? '#3b82f6' : '#10b981';
         });
     };
 
-    const speakLine = (idx) => {
-        if (idx >= podcastLines.length) { stopPlayback(); return; }
-        const line = podcastLines[idx];
+    window.podcastSpeakLine = (idx) => {
+        if (idx >= AppState.podcastLines.length) { window.podcastStopPlayback(); return; }
+        const line = AppState.podcastLines[idx];
         const nowPlaying = document.getElementById('podcast-now-playing');
         const progressLabel = document.getElementById('podcast-progress-label');
         const progressBar = document.getElementById('podcast-progress-bar');
@@ -182,8 +184,8 @@ const bindPodcastEvents = () => {
             const hostName = line.host === 'A' ? 'Alex' : 'Blake';
             nowPlaying.innerHTML = `<span style="font-size:0.7rem;font-weight:800;color:${hostColor};text-transform:uppercase;letter-spacing:0.1rem;display:block;margin-bottom:0.5rem;">${hostName}</span>${line.text}`;
         }
-        if (progressLabel) progressLabel.textContent = `Line ${idx + 1} / ${podcastLines.length}`;
-        if (progressBar) progressBar.style.width = `${((idx + 1) / podcastLines.length) * 100}%`;
+        if (progressLabel) progressLabel.textContent = `Line ${idx + 1} / ${AppState.podcastLines.length}`;
+        if (progressBar) progressBar.style.width = `${((idx + 1) / AppState.podcastLines.length) * 100}%`;
 
         updateHostDisplay(line.host);
 
@@ -194,16 +196,16 @@ const bindPodcastEvents = () => {
         utt.pitch = line.host === 'A' ? 1.1 : 0.9;
         utt.volume = 1;
         utt.onend = () => {
-            if (isPlaying) {
-                podcastIdx = idx + 1;
-                speakLine(podcastIdx);
+            if (AppState.podcastIsPlaying) {
+                AppState.podcastIdx = idx + 1;
+                window.podcastSpeakLine(AppState.podcastIdx);
             }
         };
         synth.speak(utt);
     };
 
-    const stopPlayback = () => {
-        isPlaying = false;
+    window.podcastStopPlayback = () => {
+        AppState.podcastIsPlaying = false;
         synth.cancel();
         if (utteranceTimeout) clearTimeout(utteranceTimeout);
         const playBtn = document.getElementById('btn-podcast-play');
@@ -212,12 +214,12 @@ const bindPodcastEvents = () => {
         bars.forEach(b => b.style.animation = 'none');
     };
 
-    const startPlayback = () => {
-        isPlaying = true;
+    window.podcastStartPlayback = () => {
+        AppState.podcastIsPlaying = true;
         const playBtn = document.getElementById('btn-podcast-play');
         if (playBtn) playBtn.innerHTML = '&#9646;&#9646; Pause';
         getVoices();
-        speakLine(podcastIdx);
+        window.podcastSpeakLine(AppState.podcastIdx);
     };
 
     // Generate podcast script
@@ -255,40 +257,62 @@ const bindPodcastEvents = () => {
             parts.push({ text: `${focusInstruction}Generate a ${lengthInstruction} study podcast script about the provided source material in ${language}.\nTone: ${tone}\nFormat: "${formatInstructions[format] || formatInstructions.deep_dive}"\n\nReturn ONLY raw JSON, no markdown:\n{"lines":[{"host":"A","text":"Host Alex dialogue here"},{"host":"B","text":"Host Blake dialogue here"}]}` });
             const res = await callGemini(parts, `You are a podcast script writer in ${language}. Use natural speech, filler words like "um" and "you know", and make it engaging. Tone should be ${tone}. Return ONLY raw JSON.`, null, 'application/json');
             const data = parseJsonSafe(res);
-            podcastLines = data.lines || [];
-            podcastIdx = 0;
+            AppState.podcastLines = data.lines || [];
+            AppState.podcastIdx = 0;
 
             // Show UI
             document.getElementById('podcast-player').style.display = 'block';
             document.getElementById('podcast-script-preview').style.display = 'block';
             const scriptEl = document.getElementById('podcast-script-text');
-            if (scriptEl) scriptEl.textContent = podcastLines.map(l => `[${l.host === 'A' ? 'Alex' : 'Blake'}]: ${l.text}`).join('\n\n');
+            if (scriptEl) scriptEl.textContent = AppState.podcastLines.map(l => `[${l.host === 'A' ? 'Alex' : 'Blake'}]: ${l.text}`).join('\n\n');
 
             statusEl.textContent = '';
             genBtn.disabled = false;
-            showToast(`Podcast ready! ${podcastLines.length} lines generated.`, 'success');
+            showToast(`Podcast ready! ${AppState.podcastLines.length} lines generated.`, 'success');
         } catch (e) {
             statusEl.textContent = e.message;
             genBtn.disabled = false;
         }
     };
+    
+    // Resume UI state if returning to podcast view
+    if (AppState.podcastLines && AppState.podcastLines.length > 0) {
+        document.getElementById('podcast-player').style.display = 'block';
+        document.getElementById('podcast-script-preview').style.display = 'block';
+        const scriptEl = document.getElementById('podcast-script-text');
+        if (scriptEl) scriptEl.textContent = AppState.podcastLines.map(l => `[${l.host === 'A' ? 'Alex' : 'Blake'}]: ${l.text}`).join('\n\n');
+        
+        // Show current line
+        const nowPlaying = document.getElementById('podcast-now-playing');
+        const line = AppState.podcastLines[AppState.podcastIdx] || AppState.podcastLines[0];
+        if (nowPlaying && line) {
+            const hostColor = line.host === 'A' ? '#3b82f6' : '#10b981';
+            const hostName = line.host === 'A' ? 'Alex' : 'Blake';
+            nowPlaying.innerHTML = `<span style="font-size:0.7rem;font-weight:800;color:${hostColor};text-transform:uppercase;letter-spacing:0.1rem;display:block;margin-bottom:0.5rem;">${hostName}</span>${line.text}`;
+        }
+    }
+};
 
+// Ensure we only bind the global click listener once
+if (!window._podcastClickListenerBound) {
     // Play/Pause button
     document.addEventListener('click', (e) => {
+        if (!AppState.podcastLines) return; // Not initialized
+        
         if (e.target.id === 'btn-podcast-play' || e.target.closest('#btn-podcast-play')) {
-            if (podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
-            if (isPlaying) stopPlayback();
-            else startPlayback();
+            if (AppState.podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
+            if (AppState.podcastIsPlaying) window.podcastStopPlayback();
+            else window.podcastStartPlayback();
         }
         if (e.target.id === 'btn-podcast-prev' || e.target.closest('#btn-podcast-prev')) {
-            if (podcastIdx > 0) { podcastIdx--; if (isPlaying) speakLine(podcastIdx); }
+            if (AppState.podcastIdx > 0) { AppState.podcastIdx--; if (AppState.podcastIsPlaying) window.podcastSpeakLine(AppState.podcastIdx); }
         }
         if (e.target.id === 'btn-podcast-next' || e.target.closest('#btn-podcast-next')) {
-            if (podcastIdx < podcastLines.length - 1) { podcastIdx++; if (isPlaying) speakLine(podcastIdx); }
+            if (AppState.podcastIdx < AppState.podcastLines.length - 1) { AppState.podcastIdx++; if (AppState.podcastIsPlaying) window.podcastSpeakLine(AppState.podcastIdx); }
         }
         if (e.target.id === 'btn-third-mic' || e.target.closest('#btn-third-mic')) {
-            if (podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
-            stopPlayback();
+            if (AppState.podcastLines.length === 0) return showToast('Generate a podcast first!', 'error');
+            window.podcastStopPlayback();
             document.getElementById('third-mic-panel').style.display = 'block';
             document.getElementById('third-mic-panel').scrollIntoView({ behavior: 'smooth' });
         }
@@ -302,23 +326,24 @@ const bindPodcastEvents = () => {
             const responseDiv = document.getElementById('third-mic-response');
             responseDiv.style.display = 'block';
             responseDiv.textContent = 'Hosts are improvising a response...';
-            const ctx = podcastLines.slice(Math.max(0, podcastIdx - 3), podcastIdx).map(l => `${l.host === 'A' ? 'Alex' : 'Blake'}: ${l.text}`).join('\n');
+            const ctx = AppState.podcastLines.slice(Math.max(0, AppState.podcastIdx - 3), AppState.podcastIdx).map(l => `${l.host === 'A' ? 'Alex' : 'Blake'}: ${l.text}`).join('\n');
             callGemini([{ text: `The podcast was just discussing:\n${ctx}\n\nA listener interrupted and asked: "${question}"\n\nWrite a 3-line improvised response from Host Alex (A) and Host Blake (B) answering this question before returning to the topic. Return ONLY raw JSON:\n{"response":[{"host":"A","text":"..."},{"host":"B","text":"..."},{"host":"A","text":"Anyway, back to..."}]}` }], 'Podcast host improvising a live answer.', null, 'application/json')
             .then(res => {
                 const data = parseJsonSafe(res);
                 const insertLines = data.response || [];
                 responseDiv.innerHTML = insertLines.map(l => `<div style="margin-bottom:0.5rem;"><strong style="color:${l.host==='A'?'#3b82f6':'#10b981'}">${l.host==='A'?'Alex':'Blake'}:</strong> ${l.text}</div>`).join('');
                 // Insert the improvised lines at current position
-                podcastLines.splice(podcastIdx, 0, ...insertLines);
+                AppState.podcastLines.splice(AppState.podcastIdx, 0, ...insertLines);
                 document.getElementById('third-mic-input').value = '';
                 setTimeout(() => {
                     document.getElementById('third-mic-panel').style.display = 'none';
-                    startPlayback();
+                    window.podcastStartPlayback();
                 }, 2000);
             }).catch(err => { responseDiv.textContent = err.message; });
         }
     });
-};
+    window._podcastClickListenerBound = true;
+}
 
 // Patch navigate to bind podcast events
 const _origNavigate = window.navigate;

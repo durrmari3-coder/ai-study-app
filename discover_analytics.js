@@ -254,6 +254,14 @@ window.Views.analytics = () => {
         </div>
         ` : '<div class="glass-panel" style="padding:2rem; text-align:center; color:var(--text-muted);">Take some quizzes to see your score history here.</div>'}
 
+        <!-- Mastery Heatmap Container -->
+        <div class="glass-panel" style="padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-bottom:1.25rem; font-size:1rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Source Coverage Heatmap</h3>
+            <div id="mastery-heatmap-container">
+                <div style="text-align:center; padding:2rem; color:var(--text-muted);">Initializing heatmap...</div>
+            </div>
+        </div>
+
         <!-- Per-Notebook Breakdown -->
         <div class="glass-panel" style="padding:1.5rem;">
             <h3 style="margin-bottom:1.25rem; font-size:1rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Notebook Breakdown</h3>
@@ -317,3 +325,133 @@ window.Views.analytics = () => {
     `;
     document.head.appendChild(s);
 })();
+// Analytics Patch for NotebookLM Parity (Phase 2)
+// Implements Mastery Heatmap for Source Coverage
+
+window.renderMasteryHeatmap = () => {
+    const container = document.getElementById('mastery-heatmap-container');
+    if (!container) return;
+
+    const sources = AppState.documents || [];
+    const history = AppState.chatHistory || [];
+
+
+    if (sources.length === 0) {
+        container.innerHTML = `
+            <div style="padding:3rem; text-align:center; color:var(--text-muted);">
+                <ion-icon name="analytics-outline" style="font-size:3rem; opacity:0.2; margin-bottom:1rem;"></ion-icon>
+                <p>Add sources to see your mastery heatmap.</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Phase 3 Memoization
+    const historyHash = history.length + (history[history.length-1]?.content.length || 0);
+    if (AppState._masteryCache && AppState._masteryCache.hash === historyHash) {
+        renderHeatmapUI(container, sources, AppState._masteryCache.counts);
+        return;
+    }
+
+    // Calculate citation counts
+    const counts = new Array(sources.length).fill(0);
+    history.forEach(msg => {
+        if (msg.role === 'ai' && msg.sources) {
+            msg.sources.forEach(s => {
+                if (s.index < counts.length) counts[s.index]++;
+            });
+        }
+    });
+
+    // Cache results
+    AppState._masteryCache = { hash: historyHash, counts: [...counts] };
+    renderHeatmapUI(container, sources, counts);
+};
+
+function renderHeatmapUI(container, sources, counts) {
+    const maxCount = Math.max(...counts, 1);
+    container.innerHTML = `
+        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:1rem; padding:1rem;">
+            ${sources.map((s, i) => {
+                const intensity = counts[i] / maxCount;
+                // Scale from dark blue to bright accent
+                const color = intensity > 0.8 ? '#10b981' : (intensity > 0.4 ? 'var(--accent)' : (intensity > 0 ? '#6366f1' : 'rgba(255,255,255,0.05)'));
+                return `
+                    <div class="glass-panel" style="padding:1rem; border-top: 4px solid ${color}; display:flex; flex-direction:column; gap:0.5rem; background:rgba(255,255,255,0.02); transition: transform 0.2s; cursor:help;" title="${counts[i]} citations">
+                        <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">Source ${i+1}</div>
+                        <div style="font-size:0.8rem; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:0.25rem;">${s.title}</div>
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:auto;">
+                            <span style="font-size:0.65rem; color:var(--text-muted);">Coverage</span>
+                            <span style="font-size:0.8rem; font-weight:800; color:${color}">${Math.round(intensity * 100)}%</span>
+                        </div>
+                        <div style="height:4px; width:100%; background:rgba(255,255,255,0.1); border-radius:2px; overflow:hidden;">
+                            <div style="height:100%; width:${intensity*100}%; background:${color}"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+        
+        <div style="margin-top:2rem; padding:1.5rem; border-top:1px solid var(--border-color); display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
+            <div class="glass-panel" style="padding:1.25rem; background:rgba(16, 185, 129, 0.05); border:1px solid rgba(16, 185, 129, 0.1);">
+                <div style="display:flex; align-items:center; gap:0.5rem; color:#10b981; font-weight:800; font-size:0.75rem; text-transform:uppercase; margin-bottom:0.75rem;">
+                    <ion-icon name="trending-up-outline"></ion-icon> Strongest Domain
+                </div>
+                <div style="font-size:0.9rem; font-weight:600; line-height:1.4;">${counts.indexOf(Math.max(...counts)) > -1 && Math.max(...counts) > 0 ? sources[counts.indexOf(Math.max(...counts))].title : 'Establish more context first.'}</div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem;">You have referenced this source most frequently in your research.</p>
+            </div>
+            
+            <div class="glass-panel" style="padding:1.25rem; background:rgba(239, 68, 68, 0.05); border:1px solid rgba(239, 68, 68, 0.1);">
+                <div style="display:flex; align-items:center; gap:0.5rem; color:#ef4444; font-weight:800; font-size:0.75rem; text-transform:uppercase; margin-bottom:0.75rem;">
+                    <ion-icon name="alert-circle-outline"></ion-icon> Critical Gap
+                </div>
+                <div style="font-size:0.9rem; font-weight:600; line-height:1.4;">${counts.includes(0) ? (sources[counts.indexOf(0)]?.title || 'None') : 'No unvisited sources found!'}</div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.5rem;">This document has not been cited yet. Consider asking questions about it.</p>
+            </div>
+        </div>
+    `;
+}
+
+window.generateSynthesis = async () => {
+    if (!AppState.documents || AppState.documents.length === 0) return showToast("Add sources first.", "warning");
+    if (!AppState.activeJobs) AppState.activeJobs = {};
+    AppState.activeJobs['synthesis'] = true;
+    window.renderStudioPanel();
+    
+    try {
+        const chatSummary = AppState.chatHistory.slice(-10).map(m => `${m.role.toUpperCase()}: ${m.content.substring(0, 500)}`).join('\n\n');
+        const sourceTitles = AppState.documents.map(d => d.title).join(', ');
+        
+        const prompt = `Act as a senior research analyst. Based on our conversation and the following sources (${sourceTitles}), produce a final Research Synthesis Brief. 
+        Structure it with:
+        1. Executive Summary
+        2. Core Synthesized Concepts
+        3. Cross-Source Correlations (where sources agree or disagree)
+        4. Identified Knowledge Gaps
+        5. Future Research Recommendations
+        
+        CONVERSATION CONTEXT:
+        ${chatSummary}
+        
+        Output in professional, academic Markdown.`;
+        
+        const response = await window.callGemini([{text: prompt}]);
+        
+        AppState.overviews = AppState.overviews || [];
+        AppState.overviews.push({
+            title: "Research Synthesis",
+            content: response,
+            date: Date.now(),
+            wordCount: response.split(' ').length
+        });
+        await window.saveState('overviews', AppState.overviews);
+        showToast("Synthesis complete!", "success");
+        window.navigate('overviews');
+    } catch (e) {
+        console.error(e);
+        showToast("Synthesis failed.", "error");
+    } finally {
+        AppState.activeJobs['synthesis'] = false;
+        window.renderStudioPanel();
+    }
+};

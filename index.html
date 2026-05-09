@@ -6,12 +6,14 @@
     <title>Lumina — AI Research OS</title>
     <meta name="description" content="Lumina AI — NotebookLM-style research OS. Upload sources, chat with AI, generate Audio Overviews, Mind Maps, Flashcards, Quizzes, and more.">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
     <link rel="stylesheet" href="styles.css">
     <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
     <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd/index.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
 </head>
 <body>
     <!-- ============================================================ -->
@@ -30,61 +32,37 @@
                     <ion-icon name="library-outline"></ion-icon>
                     <span>Notebooks</span>
                 </button>
-                <button class="icon-nav-btn" data-route="notebook" onclick="window.navigate('notebook')" title="Chat">
-                    <ion-icon name="chatbubbles-outline"></ion-icon>
-                    <span>Chat</span>
-                </button>
-                <button class="icon-nav-btn" data-route="notes" onclick="window.navigate('notes')" title="Notes">
-                    <ion-icon name="document-text-outline"></ion-icon>
-                    <span>Notes</span>
-                </button>
-                <button class="icon-nav-btn" data-route="studio" onclick="window.navigate('studio')" title="Studio">
-                    <ion-icon name="color-palette-outline"></ion-icon>
-                    <span>Studio</span>
-                </button>
-                <button class="icon-nav-btn" data-route="overviews" onclick="window.navigate('overviews')" title="Overviews">
-                    <ion-icon name="play-circle-outline"></ion-icon>
-                    <span>Reports</span>
-                </button>
-                <button class="icon-nav-btn" data-route="pathways" onclick="window.navigate('pathways')" title="Pathways">
-                    <ion-icon name="map-outline"></ion-icon>
-                    <span>Pathways</span>
-                </button>
-                <button class="icon-nav-btn" data-route="flashcards" onclick="window.navigate('flashcards')" title="Flashcards">
-                    <ion-icon name="albums-outline"></ion-icon>
-                    <span>Cards</span>
-                </button>
-                <button class="icon-nav-btn" data-route="quizzes" onclick="window.navigate('quizzes')" title="Quizzes">
-                    <ion-icon name="help-circle-outline"></ion-icon>
-                    <span>Quiz</span>
-                </button>
-                <button class="icon-nav-btn" data-route="podcast" onclick="window.navigate('podcast')" title="Audio">
-                    <ion-icon name="radio-outline"></ion-icon>
-                    <span>Audio</span>
-                </button>
-                <button class="icon-nav-btn" data-route="blur-study" onclick="window.navigate('blur-study')" title="Blur Study">
-                    <ion-icon name="eye-off-outline"></ion-icon>
-                    <span>Recall</span>
-                </button>
-                <button class="icon-nav-btn" data-route="study-rooms" onclick="window.navigate('study-rooms')" title="Group Study">
-                    <ion-icon name="people-outline"></ion-icon>
-                    <span>Rooms</span>
-                </button>
                 <button class="icon-nav-btn" data-route="discover" onclick="window.navigate('discover')" title="Discover">
                     <ion-icon name="globe-outline"></ion-icon>
                     <span>Discover</span>
                 </button>
+                <button class="icon-nav-btn" data-route="flashcards" onclick="window.navigate('flashcards')" title="Flashcards">
+                    <ion-icon name="card-outline"></ion-icon>
+                    <span>Flashcards</span>
+                </button>
+                <button class="icon-nav-btn" data-route="quizzes" onclick="window.navigate('quizzes')" title="Quizzes">
+                    <ion-icon name="checkbox-outline"></ion-icon>
+                    <span>Quizzes</span>
+                </button>
+                <button class="icon-nav-btn" data-route="podcast" onclick="window.navigate('podcast')" title="Podcast">
+                    <ion-icon name="mic-outline"></ion-icon>
+                    <span>Podcast</span>
+                </button>
+                <button class="icon-nav-btn" data-route="pathways" onclick="window.navigate('pathways')" title="Pathways">
+                    <ion-icon name="git-branch-outline"></ion-icon>
+                    <span>Pathways</span>
+                </button>
+                <button class="icon-nav-btn" data-route="analytics" onclick="window.navigate('analytics')" title="Analytics">
+                    <ion-icon name="stats-chart-outline"></ion-icon>
+                    <span>Analytics</span>
+                </button>
+                <button class="icon-nav-btn" data-route="study-rooms" onclick="window.navigate('study-rooms')" title="Study Rooms">
+                    <ion-icon name="people-outline"></ion-icon>
+                    <span>Study Rooms</span>
+                </button>
                 <button class="icon-nav-btn" data-route="search-sources" onclick="window.navigate('search-sources')" title="Web Search">
                     <ion-icon name="search-outline"></ion-icon>
                     <span>Search</span>
-                </button>
-                <button class="icon-nav-btn" data-route="analytics" onclick="window.navigate('analytics')" title="Analytics">
-                    <ion-icon name="bar-chart-outline"></ion-icon>
-                    <span>Analytics</span>
-                </button>
-                <button class="icon-nav-btn" data-route="review-mistakes" onclick="window.navigate('review-mistakes')" title="Mistake Bank">
-                    <ion-icon name="bug-outline"></ion-icon>
-                    <span>Mistakes</span>
                 </button>
             </div>
 
@@ -117,7 +95,13 @@
     <!-- UI Components (Modals, Toasts) -->
     <div id="modal-container" class="modal-container hidden">
         <div class="modal-backdrop" onclick="document.getElementById('modal-container').classList.add('hidden')"></div>
-        <div class="modal-content glass-panel" id="modal-body"></div>
+        <div class="modal-content glass-panel">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; padding:1.25rem 1.5rem; border-bottom:1px solid var(--border-color);">
+                <h3 id="modal-title" style="margin:0; font-size:1.15rem; font-weight:700;"></h3>
+                <button class="panel-icon-btn" onclick="window.closeModal()" style="flex-shrink:0;"><ion-icon name="close-outline"></ion-icon></button>
+            </div>
+            <div id="modal-body" style="max-height:75vh; overflow-y:auto;"></div>
+        </div>
     </div>
     <div id="toast-container" class="toast-container"></div>
 
@@ -205,7 +189,7 @@
         };
     </script>
 
-    <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd/index.js"></script>
+
     <script src="ui_utils.js"></script>
     <script type="module" src="app.js"></script>
     <script type="module" src="rag_engine.js"></script>
