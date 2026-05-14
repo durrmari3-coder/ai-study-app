@@ -1803,17 +1803,20 @@ const Views = {
                 <button class="btn btn-primary" id="btn-gen-flashcards" style="align-self: flex-end; margin-top: 1rem"><ion-icon name="sparkles"></ion-icon> Generate New Deck</button>
             </div>
             <div id="flashcard-workspace">
-                ${decks.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No decks created yet.</p>' : 
-                decks.map((d, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1rem;">
-                    <div><h4 style="margin:0">${d.title}</h4><p style="margin:0; font-size:0.8rem; color:var(--text-muted)">${d.cards.length} cards &bull; ${d.date}</p></div>
-                    <div style="display:flex; gap:0.5rem;">
-                        <button class="btn btn-secondary btn-sm" onclick="window.navigate('search-sources'); setTimeout(() => { document.getElementById('search-input').value = '${d.title}'; window.executeSearch(); }, 100)">Find Sources</button>
-                        <button class="btn btn-secondary btn-sm" onclick="window.studyDeck(${i})">Study</button>
+                ${decks.length === 0 ? `
+                    <div style="text-align:center; padding: 5rem; color:var(--text-muted);">
+                        <ion-icon name="albums-outline" style="font-size:4rem; opacity:0.3; display:block; margin-bottom:1rem;"></ion-icon>
+                        <p style="font-size:1rem;">No decks yet. Add sources to a notebook and click <strong>Generate New Deck</strong>.</p>
+                    </div>` : 
+                decks.map((d, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius:1rem;">
+                    <div><h4 style="margin:0; font-weight:700">${d.title}</h4><p style="margin:0.25rem 0 0; font-size:0.8rem; color:var(--text-muted)">${(d.cards||[]).length} cards &bull; ${new Date(d.date).toLocaleDateString()}</p></div>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <button class="btn btn-primary btn-sm" onclick="window.studyDeck(${i})"><ion-icon name="play-outline"></ion-icon> Study</button>
+                        <button class="panel-icon-btn" onclick="if(confirm('Delete this deck?')){AppState.flashcards.splice(${i},1);saveState('flashcards',AppState.flashcards);window.navigate('flashcards');}" style="color:var(--error)" title="Delete"><ion-icon name="trash-outline"></ion-icon></button>
                     </div>
                 </div>`).join('')}
             </div>
         </div>`;
-
     },
     quizzes: () => {
         const quizzes = AppState.quizzes || [];
@@ -1830,12 +1833,21 @@ const Views = {
                 <button class="btn btn-primary" id="btn-gen-quiz" style="align-self: flex-end; margin-top: 1rem"><ion-icon name="sparkles"></ion-icon> Start New Quiz</button>
             </div>
             <div id="quiz-workspace">
-                ${quizzes.length === 0 ? '<p style="text-align:center; color:var(--text-muted); padding: 5rem;">No assessments completed yet.</p>' : 
-                quizzes.map((q, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1rem;">
-                    <div><h4 style="margin:0">${q.title}</h4><p style="margin:0; font-size:0.8rem; color:var(--text-muted)">Score: ${q.score}% &bull; ${q.date}</p></div>
+                ${quizzes.length === 0 ? `
+                    <div style="text-align:center; padding: 5rem; color:var(--text-muted);">
+                        <ion-icon name="checkbox-outline" style="font-size:4rem; opacity:0.3; display:block; margin-bottom:1rem;"></ion-icon>
+                        <p style="font-size:1rem;">No quizzes yet. Add sources to a notebook and click <strong>Start New Quiz</strong>.</p>
+                    </div>` : 
+                quizzes.map((q, i) => `<div class="glass-panel" style="margin-bottom: 1rem; display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius:1rem;">
+                    <div>
+                        <h4 style="margin:0; font-weight:700">${q.title || 'Quiz ' + (i+1)}</h4>
+                        <p style="margin:0.25rem 0 0; font-size:0.8rem; color:var(--text-muted)">
+                            ${q.questions ? q.questions.length + ' questions' : '—'} &bull; Score: <span style="color:${(q.score||0)>=70?'var(--success)':'#f59e0b'}; font-weight:700">${q.score||0}%</span> &bull; ${new Date(q.date).toLocaleDateString()}
+                        </p>
+                    </div>
                     <div style="display:flex; gap:0.5rem;">
-                        <button class="btn btn-secondary btn-sm" onclick="window.navigate('search-sources'); setTimeout(() => { document.getElementById('search-input').value = '${q.title}'; window.executeSearch(); }, 100)">Find Sources</button>
-                        <button class="btn btn-secondary btn-sm" onclick="window.viewQuiz(${i})">View</button>
+                        <button class="btn btn-primary btn-sm" onclick="window.viewQuiz(${i})">Take Quiz</button>
+                        <button class="panel-icon-btn" onclick="if(confirm('Delete this quiz?')){AppState.quizzes.splice(${i},1);saveState('quizzes',AppState.quizzes);window.navigate('quizzes');}" style="color:var(--error)" title="Delete"><ion-icon name="trash-outline"></ion-icon></button>
                     </div>
                 </div>`).join('')}
             </div>
@@ -2267,9 +2279,10 @@ const Views = {
             <p style="color:var(--text-muted); margin-bottom: 2rem;">AI-generated curricula designed to take you from beginner to expert using your sources.</p>
             
             <div style="display:flex; flex-direction: column; gap: 1rem; margin-bottom: 2.5rem; background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: 1rem; border: 1px solid var(--border-color)">
-                <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 1.5rem;">
+                <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
                     ${customFocusInput('input-pathway-focus')}
-                    <button class="btn btn-primary" onclick="window.generatePathway()" style="margin-top:auto;"><ion-icon name="map-outline"></ion-icon> Build Learning Path</button>
+                    ${complexitySelector('pathway-complexity')}
+                    <button class="btn btn-primary" id="btn-gen-pathway" style="margin-top:auto;"><ion-icon name="map-outline"></ion-icon> Build Learning Path</button>
                 </div>
             </div>
 
@@ -2481,8 +2494,6 @@ window.navigate = (route) => {
             // Phase 4: Ensure studio workspace is closed on re-entry
             window.closeStudioWorkspace();
         }
-        if (route === 'flashcards') window.renderFlashcards();
-        if (route === 'quizzes') window.renderQuizzes();
         if (route === 'analytics') if(window.renderMasteryHeatmap) window.renderMasteryHeatmap();
     }
 };
@@ -2514,104 +2525,6 @@ window.bindViewEvents = (route) => {
     if (route === 'studio') {
         // Integrated into Notebook view
     }
-}; // END bindViewEvents
-
-window.suggestAction = (type) => {
-    const input = document.getElementById('chat-input');
-    if (!input) return;
-    const queries = {
-        summarize: "Summarize the key takeaways from these sources.",
-        concepts: "Identify the core concepts discussed.",
-        quiz: "Test my knowledge with a quick 3-question quiz.",
-        gaps: "What are the research gaps or missing perspectives?",
-        eli5: "Explain the last point like I'm five."
-    };
-    input.value = queries[type] || "";
-    document.getElementById('btn-send-chat')?.click();
-};
-
-window.generateStudio = async (type) => {
-    if(!AppState.activeNotebookId) return showToast("Open a notebook first", "error");
-    let activeIndices = AppState.activeSourceIndices;
-    if (!activeIndices || activeIndices.length === 0) {
-        const docCount = AppState.documents.length;
-        if (docCount === 0) return showToast("Add sources first", "error");
-        activeIndices = Array.from({length: docCount}, (_, i) => i);
-        AppState.activeSourceIndices = activeIndices;
-    }
-
-    window.toggleStudioWorkspace(true);
-    const ws = document.getElementById('studio-workspace');
-    if (ws) {
-        ws.innerHTML = `<div style="text-align:center; padding: 3rem; display:flex; flex-direction:column; align-items:center; gap:1rem;">
-            <ion-icon name="sync-outline" class="spin" style="font-size:2.5rem; color:var(--accent);"></ion-icon>
-            <p style="font-size:1rem; font-weight:600;">Architecting ${type}...</p>
-        </div>`;
-    }
-    
-    try {
-        const parts = getActiveContextParts();
-        const focus = document.getElementById('input-studio-focus')?.value || "General Overview";
-        const complexity = document.getElementById('studio-complexity')?.value || "medium";
-        const complexityInstruction = getComplexityModifier(complexity);
-        const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
-        
-        let outputHtml = "";
-        let rawContent = null;
-        
-        if (type === 'presentation') {
-            parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly 5 slides. Return ONLY JSON: {"slides":[{"title":"string","subtitle":"string","content":"string","bullets":[]}]}` });
-            const res = await callGemini(parts, "JSON generator.", null, "application/json");
-            const deck = parseJsonSafe(res);
-            outputHtml = `<div class="presentation-slides">` + deck.slides.map((s, i) => `
-                <div class="glass-panel" style="margin-bottom:1rem; padding:1.25rem;">
-                    <h4 style="color:var(--accent); margin-bottom:0.25rem;">${i+1}. ${s.title}</h4>
-                    <p style="font-size:0.85rem; margin-bottom:0.75rem;">${s.content}</p>
-                    <ul style="font-size:0.8rem; color:var(--text-muted);">${s.bullets.map(b => `<li>${b}</li>`).join('')}</ul>
-                </div>`).join('') + `</div>`;
-            rawContent = deck;
-            if (!AppState.presentations) AppState.presentations = [];
-            AppState.presentations.unshift(deck);
-            saveState('presentations', AppState.presentations);
-        } else if (type === 'knowledgemap') {
-            parts.push({ text: `Extract 10 concept nodes and relationships. Return ONLY JSON: {"nodes":[], "edges":[]}` });
-            const res = await callGemini(parts, "Graph expert.", null, "application/json");
-            const graph = parseJsonSafe(res);
-            outputHtml = `<div id="temp-km-container" style="width:100%; height:450px; border-radius:1rem; background:rgba(0,0,0,0.2);"></div>`;
-            rawContent = graph;
-        } else {
-            const userPrompt = type === 'timeline' ? "Extract a chronological timeline." : (type === 'datatable' ? "Extract key facts into a table." : "Create a detailed study summary.");
-            parts.push({ text: `${complexityInstruction}${focusInstruction}${userPrompt}` });
-            const res = await callGemini(parts, "Research expert.");
-            outputHtml = `<div class="studio-report-content">${marked.parse(res)}</div>`;
-            rawContent = res;
-        }
-        
-        const nb = AppState.notebooks.find(n => n.id === AppState.activeNotebookId);
-        if (nb) {
-            nb.notes = nb.notes || [];
-            nb.notes.unshift({
-                id: Math.random().toString(36).substring(2, 9),
-                type: type,
-                title: `${type.toUpperCase()} - ${focus.substring(0, 20)}`,
-                content: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent),
-                html: outputHtml,
-                date: new Date().toISOString()
-            });
-            await saveState('notebooks', AppState.notebooks);
-        }
-        
-        if (ws) {
-            ws.innerHTML = outputHtml;
-            if (type === 'knowledgemap' && window.renderKnowledgeMap) {
-                window.renderKnowledgeMap(document.getElementById('temp-km-container'), rawContent);
-            }
-        }
-    } catch (e) {
-        console.error(e);
-        if (ws) ws.innerHTML = `<div class="error-box">Generation failed: ${e.message}</div>`;
-    }
-};
 
     if (route === 'notebook') {
         const input = document.getElementById('chat-input');
@@ -2744,11 +2657,19 @@ window.generateStudio = async (type) => {
         }
     }
     if (route === 'flashcards') {
-        document.getElementById('btn-gen-flashcards').onclick = async () => {
-            if(AppState.activeSourceIndices.length === 0) return showToast("Select active sources first", "error");
-            const count = document.getElementById('input-card-count').value || 10;
-            const focus = document.getElementById('input-flashcard-focus').value;
-            const complexity = document.getElementById('flashcard-complexity').value;
+        const genFlashcardsBtn = document.getElementById('btn-gen-flashcards');
+        if (genFlashcardsBtn) genFlashcardsBtn.onclick = async () => {
+            // Auto-select all sources if none are selected
+            if(AppState.activeSourceIndices.length === 0) {
+                if (AppState.documents.length === 0) return showToast("Add sources to a notebook first, then generate flashcards.", "error");
+                AppState.activeSourceIndices = Array.from({length: AppState.documents.length}, (_, i) => i);
+                showToast(`Auto-selected ${AppState.documents.length} source(s) for generation.`, 'info');
+            }
+            const count = document.getElementById('input-card-count')?.value || 10;
+            const focus = document.getElementById('input-flashcard-focus')?.value || '';
+            const complexity = document.getElementById('flashcard-complexity')?.value || 'medium';
+            const btn = document.getElementById('btn-gen-flashcards');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<ion-icon name="sync-outline" class="spin"></ion-icon> Generating...'; }
             showToast("Gemini is curating your mastery deck...");
             try {
                 const parts = getActiveContextParts();
@@ -2757,35 +2678,52 @@ window.generateStudio = async (type) => {
                 parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} flashcards from the source material. For each card, provide a term, a clear definition, and a 'mnemonic' (a surreal, memorable image description or memory hook to help remember it). Also include an 'imagePrompt' (a short DALL-E style prompt for a surreal illustration of the concept). Return ONLY raw valid JSON: {"cards":[{"term":"string","definition":"string","mnemonic":"string","imagePrompt":"string"}]}` });
                 const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON.", null, "application/json");
                 const deck = parseJsonSafe(res);
-                deck.title = "Mastery Deck " + new Date().toLocaleDateString();
+                deck.title = (focus ? focus.substring(0,30) + ' - ' : '') + "Flashcard Deck " + new Date().toLocaleDateString();
                 deck.date = new Date().toISOString();
                 AppState.flashcards.push(deck);
                 saveState('flashcards', AppState.flashcards);
+                showToast('Flashcard deck created! 🎉', 'success');
                 window.navigate('flashcards');
             } catch (e) { showToast(e.message, "error"); }
+            finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<ion-icon name="sparkles"></ion-icon> Generate New Deck'; }
+            }
         };
     }
 
     if (route === 'quizzes') {
-        document.getElementById('btn-gen-quiz').onclick = async () => {
-            if(AppState.activeSourceIndices.length === 0) return showToast("Select active sources first", "error");
-            const count = document.getElementById('input-quiz-count').value || 5;
-            const focus = document.getElementById('input-quiz-focus').value;
-            const complexity = document.getElementById('quiz-complexity').value;
+        const genQuizBtn = document.getElementById('btn-gen-quiz');
+        if (genQuizBtn) genQuizBtn.onclick = async () => {
+            // Auto-select all sources if none are selected
+            if(AppState.activeSourceIndices.length === 0) {
+                if (AppState.documents.length === 0) return showToast("Add sources to a notebook first, then generate a quiz.", "error");
+                AppState.activeSourceIndices = Array.from({length: AppState.documents.length}, (_, i) => i);
+                showToast(`Auto-selected ${AppState.documents.length} source(s) for generation.`, 'info');
+            }
+            const count = document.getElementById('input-quiz-count')?.value || 5;
+            const focus = document.getElementById('input-quiz-focus')?.value || '';
+            const complexity = document.getElementById('quiz-complexity')?.value || 'medium';
+            const btn = document.getElementById('btn-gen-quiz');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<ion-icon name="sync-outline" class="spin"></ion-icon> Generating...'; }
             showToast("Gemini is drafting an assessment...");
             try {
                 const parts = getActiveContextParts();
                 const complexityInstruction = getComplexityModifier(complexity);
                 const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
-                parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} multiple choice questions from the source material. Return ONLY raw valid JSON, no markdown: {"title":"Quiz Title","questions":[{"q":"Question text","options":["A","B","C","D"],"correct":0}]}` });
+                parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly ${count} multiple choice questions from the source material. Return ONLY raw valid JSON, no markdown: {"title":"${focus || 'Knowledge Check'} Quiz","questions":[{"q":"Question text","options":["A","B","C","D"],"correct":0}]}` });
                 const res = await callGemini(parts, "You are a JSON generator. Return ONLY raw valid JSON, no markdown fences, no explanation.", null, "application/json");
                 const quiz = parseJsonSafe(res);
                 quiz.date = new Date().toISOString();
                 quiz.score = 0;
+                if (!quiz.title) quiz.title = (focus || 'Knowledge Check') + ' Quiz';
                 AppState.quizzes.push(quiz);
                 saveState('quizzes', AppState.quizzes);
+                showToast('Quiz generated! Click "Take Quiz" to begin.', 'success');
                 window.navigate('quizzes');
             } catch (e) { showToast(e.message, "error"); }
+            finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<ion-icon name="sparkles"></ion-icon> Start New Quiz'; }
+            }
         };
     }
     
@@ -2868,16 +2806,19 @@ window.generateStudio = async (type) => {
     }
 
     if (route === 'pathways') {
-        document.getElementById('btn-gen-pathway').onclick = async () => {
-            if(AppState.activeSourceIndices.length === 0) return showToast("Select sources first", "error");
+        const genPathwayBtn = document.getElementById('btn-gen-pathway');
+        if (genPathwayBtn) genPathwayBtn.onclick = async () => {
+            if(AppState.activeSourceIndices.length === 0) {
+                if (AppState.documents.length === 0) return showToast("Add sources first", "error");
+                AppState.activeSourceIndices = Array.from({length: AppState.documents.length}, (_, i) => i);
+            }
             const statusEl = document.getElementById('pathway-status');
             const workspace = document.getElementById('pathway-workspace');
-            workspace.style.display = 'block';
-            workspace.innerHTML = '';
-            statusEl.textContent = "Architecting your learning pathway...";
+            if (workspace) { workspace.style.display = 'block'; workspace.innerHTML = ''; }
+            if (statusEl) statusEl.textContent = "Architecting your learning pathway...";
             
-            const focus = document.getElementById('input-pathway-focus').value;
-            const complexity = document.getElementById('pathway-complexity').value;
+            const focus = document.getElementById('input-pathway-focus')?.value || '';
+            const complexity = document.getElementById('pathway-complexity')?.value || 'medium';
             const complexityInstruction = getComplexityModifier(complexity);
             const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
             
@@ -2891,16 +2832,20 @@ window.generateStudio = async (type) => {
                 AppState.pathways.push(pathway);
                 saveState('pathways', AppState.pathways);
                 
-                workspace.innerHTML = `<div class="glass-panel" style="background:rgba(255,255,255,0.02);">${marked.parse(res)}</div>`;
-                statusEl.textContent = "";
+                if (workspace) workspace.innerHTML = `<div class="glass-panel" style="background:rgba(255,255,255,0.02);">${marked.parse(res)}</div>`;
+                if (statusEl) statusEl.textContent = "";
                 showToast("Pathway generated!");
-            } catch (e) { statusEl.textContent = e.message; }
+            } catch (e) { if (statusEl) statusEl.textContent = e.message; }
         };
     }
 
     if (route === 'blur-study') {
-        document.getElementById('btn-gen-blur').onclick = async () => {
-            if(AppState.activeSourceIndices.length === 0) return showToast("Select sources first", "error");
+        const blurBtn = document.getElementById('btn-gen-blur');
+        if (blurBtn) blurBtn.onclick = async () => {
+            if(AppState.activeSourceIndices.length === 0) {
+                if (AppState.documents.length === 0) return showToast("Add sources first", "error");
+                AppState.activeSourceIndices = Array.from({length: AppState.documents.length}, (_, i) => i);
+            }
             const statusEl = document.getElementById('blur-status');
             const workspace = document.getElementById('blur-workspace');
             const textPanel = document.getElementById('blur-text-panel');
@@ -3146,6 +3091,104 @@ window.generateStudio = async (type) => {
     }
 };
 
+window.suggestAction = (type) => {
+    const input = document.getElementById('chat-input');
+    if (!input) return;
+    const queries = {
+        summarize: "Summarize the key takeaways from these sources.",
+        concepts: "Identify the core concepts discussed.",
+        quiz: "Test my knowledge with a quick 3-question quiz.",
+        gaps: "What are the research gaps or missing perspectives?",
+        eli5: "Explain the last point like I'm five."
+    };
+    input.value = queries[type] || "";
+    document.getElementById('btn-send-chat')?.click();
+};
+
+window.generateStudio = async (type) => {
+    if(!AppState.activeNotebookId) return showToast("Open a notebook first", "error");
+    let activeIndices = AppState.activeSourceIndices;
+    if (!activeIndices || activeIndices.length === 0) {
+        const docCount = AppState.documents.length;
+        if (docCount === 0) return showToast("Add sources first", "error");
+        activeIndices = Array.from({length: docCount}, (_, i) => i);
+        AppState.activeSourceIndices = activeIndices;
+    }
+
+    window.toggleStudioWorkspace(true);
+    const ws = document.getElementById('studio-workspace');
+    if (ws) {
+        ws.innerHTML = `<div style="text-align:center; padding: 3rem; display:flex; flex-direction:column; align-items:center; gap:1rem;">
+            <ion-icon name="sync-outline" class="spin" style="font-size:2.5rem; color:var(--accent);"></ion-icon>
+            <p style="font-size:1rem; font-weight:600;">Architecting ${type}...</p>
+        </div>`;
+    }
+    
+    try {
+        const parts = getActiveContextParts();
+        const focus = document.getElementById('input-studio-focus')?.value || "General Overview";
+        const complexity = document.getElementById('studio-complexity')?.value || "medium";
+        const complexityInstruction = getComplexityModifier(complexity);
+        const focusInstruction = focus ? `\nUSER FOCUS INSTRUCTION: ${focus}\n` : '';
+        
+        let outputHtml = "";
+        let rawContent = null;
+        
+        if (type === 'presentation') {
+            parts.push({ text: `${complexityInstruction}${focusInstruction}Create exactly 5 slides. Return ONLY JSON: {"slides":[{"title":"string","subtitle":"string","content":"string","bullets":[]}]}` });
+            const res = await callGemini(parts, "JSON generator.", null, "application/json");
+            const deck = parseJsonSafe(res);
+            outputHtml = `<div class="presentation-slides">` + deck.slides.map((s, i) => `
+                <div class="glass-panel" style="margin-bottom:1rem; padding:1.25rem;">
+                    <h4 style="color:var(--accent); margin-bottom:0.25rem;">${i+1}. ${s.title}</h4>
+                    <p style="font-size:0.85rem; margin-bottom:0.75rem;">${s.content}</p>
+                    <ul style="font-size:0.8rem; color:var(--text-muted);">${s.bullets.map(b => `<li>${b}</li>`).join('')}</ul>
+                </div>`).join('') + `</div>`;
+            rawContent = deck;
+            if (!AppState.presentations) AppState.presentations = [];
+            AppState.presentations.unshift(deck);
+            saveState('presentations', AppState.presentations);
+        } else if (type === 'knowledgemap') {
+            parts.push({ text: `Extract 10 concept nodes and relationships. Return ONLY JSON: {"nodes":[], "edges":[]}` });
+            const res = await callGemini(parts, "Graph expert.", null, "application/json");
+            const graph = parseJsonSafe(res);
+            outputHtml = `<div id="temp-km-container" style="width:100%; height:450px; border-radius:1rem; background:rgba(0,0,0,0.2);"></div>`;
+            rawContent = graph;
+        } else {
+            const userPrompt = type === 'timeline' ? "Extract a chronological timeline." : (type === 'datatable' ? "Extract key facts into a table." : "Create a detailed study summary.");
+            parts.push({ text: `${complexityInstruction}${focusInstruction}${userPrompt}` });
+            const res = await callGemini(parts, "Research expert.");
+            outputHtml = `<div class="studio-report-content">${marked.parse(res)}</div>`;
+            rawContent = res;
+        }
+        
+        const nb = AppState.notebooks.find(n => n.id === AppState.activeNotebookId);
+        if (nb) {
+            nb.notes = nb.notes || [];
+            nb.notes.unshift({
+                id: Math.random().toString(36).substring(2, 9),
+                type: type,
+                title: `${type.toUpperCase()} - ${focus.substring(0, 20)}`,
+                content: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent),
+                html: outputHtml,
+                date: new Date().toISOString()
+            });
+            await saveState('notebooks', AppState.notebooks);
+        }
+        
+        if (ws) {
+            ws.innerHTML = outputHtml;
+            if (type === 'knowledgemap' && window.renderKnowledgeMap) {
+                window.renderKnowledgeMap(document.getElementById('temp-km-container'), rawContent);
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        if (ws) ws.innerHTML = `<div class="error-box">Generation failed: ${e.message}</div>`;
+    }
+};
+
+
 // ==========================================
 // UTILITY STUBS (required by inline HTML handlers)
 // ==========================================
@@ -3162,8 +3205,25 @@ window.showModal = (title, body) => {
 window.closeModal = () => { document.getElementById('modal-container')?.classList.add('hidden'); };
 window.showIngestModal = () => window.openIngestModal?.();
 window.showUserMenu = () => {};
-window.renderFlashcards = () => {};
-window.renderQuizzes = () => {};
+// renderFlashcards and renderQuizzes: re-render the current view if already on that page
+window.renderFlashcards = () => {
+    if (typeof currentRoute !== 'undefined' && currentRoute === 'flashcards') {
+        const vc = document.getElementById('view-container');
+        if (vc && window.Views && window.Views.flashcards) {
+            vc.innerHTML = `<div class="view-section active">${window.Views.flashcards()}</div>`;
+            if (window.bindViewEvents) window.bindViewEvents('flashcards');
+        }
+    }
+};
+window.renderQuizzes = () => {
+    if (typeof currentRoute !== 'undefined' && currentRoute === 'quizzes') {
+        const vc = document.getElementById('view-container');
+        if (vc && window.Views && window.Views.quizzes) {
+            vc.innerHTML = `<div class="view-section active">${window.Views.quizzes()}</div>`;
+            if (window.bindViewEvents) window.bindViewEvents('quizzes');
+        }
+    }
+};
 
 window.saveChatToNotes = (idx) => {
     const msg = AppState.chatHistory[idx];
@@ -3446,7 +3506,8 @@ window.viewPathway = (idx) => {
 window.viewQuiz = (idx) => {
     const quiz = AppState.quizzes[idx];
     if (!quiz) return;
-    const contentArea = document.getElementById('content-area');
+    // Use view-container since content-area doesn't exist in the quizzes view
+    const contentArea = document.getElementById('view-container');
     let current = 0;
     let score = 0;
     let answered = false;
@@ -3888,36 +3949,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // --- Phase 9: Adaptive Learning Pathways & Focus Modes ---
 
-window.generatePathway = async () => {
-    if (AppState.documents.length === 0) return showToast('Upload sources first!', 'error');
-    const focus = document.getElementById('input-pathway-focus').value || 'Core Concepts';
-    const status = document.getElementById('pathway-status');
-    const ws = document.getElementById('pathway-workspace');
-    
-    status.innerText = "✨ Mapping curriculum nodes...";
-    ws.style.display = 'block';
-    ws.innerHTML = '<div style="text-align:center; padding:3rem;"><ion-icon name="sync-outline" style="font-size:2rem; animation: rotate 2s linear infinite;"></ion-icon></div>';
-
-    try {
-        const prompt = `Generate a structured learning pathway (curriculum) for the topic "${focus}" based on these documents: ${AppState.documents.map(d=>d.title).join(', ')}.
-        Return a JSON object: { "title": "Topic Name", "steps": [ { "id": 1, "title": "Basics", "description": "Short description", "content": "Deep dive explanation text in Markdown", "resources": ["Doc Title"] } ] }.
-        Provide exactly 5 logical steps from beginner to expert.`;
-
-        const response = await window.callGemini(prompt, 'You are a JSON curriculum designer. Return ONLY raw valid JSON.');
-        const pathway = parseJsonSafe(response);
-        pathway.date = new Date().toISOString();
-        
-        AppState.pathways = AppState.pathways || [];
-        AppState.pathways.push(pathway);
-        await window.saveState('pathways', AppState.pathways);
-
-        window.renderPathway(pathway);
-        status.innerText = "";
-    } catch (e) {
-        console.error(e);
-        status.innerText = "Error mapping pathway.";
-    }
-};
 
 window.renderPathway = (pathway) => {
     const ws = document.getElementById('pathway-workspace');
@@ -3948,20 +3979,21 @@ window.viewPathway = (idx) => {
 
 window.showPathwayStep = (stepIdx) => {
     // Current pathway is either the last generated or selected from history
-    const p = AppState.pathways[AppState.pathways.length - 1]; 
+    const p = AppState.pathways[AppState.pathways.length - 1];
+    if (!p || !p.steps) return;
     const step = p.steps[stepIdx];
+    if (!step) return;
     
-    const content = `
+    const body = `
         <div style="padding:1rem;">
-            <h2 style="color:var(--accent); margin-bottom:1rem;">${step.title}</h2>
-            <div style="line-height:1.7; font-size:0.95rem; margin-bottom:1.5rem;">${marked.parse(step.content)}</div>
-            <div style="background:rgba(255,255,255,0.03); padding:1rem; border-radius:0.5rem;">
+            <div style="line-height:1.7; font-size:0.95rem; margin-bottom:1.5rem;">${marked.parse(step.content || step.description || '')}</div>
+            ${step.resources && step.resources.length ? `<div style="background:rgba(255,255,255,0.03); padding:1rem; border-radius:0.5rem;">
                 <h5 style="margin:0 0 0.5rem; color:var(--text-muted);">References</h5>
                 <p style="margin:0; font-size:0.8rem;">${step.resources.join(', ')}</p>
-            </div>
+            </div>` : ''}
         </div>
     `;
-    window.showModal(content);
+    window.showModal(step.title || 'Pathway Step', body);
 };
 
 window.enterBlurStudy = () => {

@@ -227,12 +227,15 @@ const bindPodcastEvents = () => {
     if (!genBtn) return;
 
     genBtn.onclick = async () => {
-        if (AppState.activeSourceIndices.length === 0) return showToast('Select sources first', 'error');
+        if (AppState.activeSourceIndices.length === 0) {
+            if (AppState.documents.length === 0) return showToast('Add sources first', 'error');
+            AppState.activeSourceIndices = Array.from({length: AppState.documents.length}, (_, i) => i);
+        }
         const statusEl = document.getElementById('podcast-status');
-        statusEl.textContent = 'Gemini is writing your podcast script...';
+        if (statusEl) statusEl.textContent = 'Gemini is writing your podcast script...';
         genBtn.disabled = true;
 
-        const focus = document.getElementById('input-podcast-focus').value;
+        const focus = document.getElementById('input-podcast-focus')?.value || '';
         const format = document.getElementById('podcast-format').value;
         const tone = document.getElementById('podcast-style') ? document.getElementById('podcast-style').value : 'Conversational';
         const language = document.getElementById('podcast-language') ? document.getElementById('podcast-language').value : 'English';
